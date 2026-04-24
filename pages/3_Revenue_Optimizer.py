@@ -74,7 +74,12 @@ def tier_color(is_base: bool, is_best: bool) -> str:
 with st.sidebar:
     st.header("🎮 Game")
     game_name = st.text_input("Game Name", value=st.session_state.get("ro_game_name", ""), placeholder="e.g. Hollow Knight")
-    genre     = st.selectbox("Genre", GENRES, index=GENRES.index(st.session_state.get("ro_genre", "Action RPG")) if st.session_state.get("ro_genre") in GENRES else 2)
+    saved_genres = st.session_state.get("ro_genres", ["Action RPG"])
+    if isinstance(saved_genres, str):
+        saved_genres = [saved_genres]
+    genres    = st.multiselect("Genre(s)", GENRES, default=[g for g in saved_genres if g in GENRES] or ["Action RPG"])
+    if not genres:
+        genres = ["Action RPG"]
     tier      = st.radio("Quality Tier", ["indie", "aa", "aaa"], format_func=lambda x: TIER_LABELS[x],
                          index=["indie","aa","aaa"].index(st.session_state.get("ro_tier","indie")),
                          horizontal=True)
@@ -130,7 +135,7 @@ with st.sidebar:
 
     # Persist to session state
     st.session_state["ro_game_name"]  = game_name
-    st.session_state["ro_genre"]      = genre
+    st.session_state["ro_genres"]     = genres
     st.session_state["ro_tier"]       = tier
     st.session_state["ro_units_p50"]  = units_p50
     st.session_state["ro_base_price"] = base_price
@@ -138,7 +143,7 @@ with st.sidebar:
 # ── Main panel ─────────────────────────────────────────────────────────────────
 st.title("📈 Revenue Optimizer")
 st.caption(
-    f"**{game_name or 'Your Game'}** · {TIER_LABELS[tier]} · {genre} · "
+    f"**{game_name or 'Your Game'}** · {TIER_LABELS[tier]} · {' / '.join(genres)} · "
     f"Base price ${base_price:.2f} · P50 {fmt_units(units_p50)} units"
 )
 
@@ -153,6 +158,34 @@ st.caption(
     f"ASP = {get_asp_factor(tier, sentiment):.0%} of MSRP (blended year-1, post-discount). "
     f"Net = gross × {STEAM_SHARE:.0%} Steam share × {VAT_FACTOR:.0%} VAT factor."
 )
+with st.expander("ℹ️ How are the ASP factor and elasticity calculated?"):
+    st.markdown(f"""
+**Blended ASP Factor ({get_asp_factor(tier, sentiment):.0%})**
+
+This is a *static calibration factor* — not a real-time calculation from your specific discount schedule.
+It represents the **year-1 average selling price as a fraction of MSRP**, and accounts for three things:
+
+| Source of discount | Typical impact |
+|---|---|
+| Seasonal sale events (Summer, Winter, etc.) | −10% to −30% on MSRP |
+| Regional pricing (Steam suggests lower prices for EM markets) | −5% to −15% |
+| Refunds (Steam's 2-hour policy) | −1% to −3% |
+
+The factor was calibrated from benchmark titles tracked in Launch Ledger (Apr 2026) across indie, AA, and AAA tiers.
+It is **not** derived from unit-split data (units sold at full price vs. discount price) — that level of
+per-game sales velocity data is not publicly available on Steam.
+
+The **Discount Calendar section below** provides a more granular simulation: it weights actual days at each
+sale price against full-price days to compute a calendar-specific blended ASP for your chosen events.
+
+**Price Elasticity ({elasticity:.1f})**
+
+Standard price elasticity of demand: for every 10% price increase, units sold change by `elasticity × 10%`.
+At −0.8 (default): a 10% price hike → ~8% fewer units sold (slightly inelastic — buyers aren't extremely sensitive).
+Research range for Steam games: **−0.5** (niche/premium titles) to **−1.5** (mass-market/casual titles).
+This is a model assumption — your game's actual elasticity depends on genre, comp set, and audience.
+    """)
+
 
 curve = build_price_curve(
     base_units_p10=float(units_p10),
@@ -368,7 +401,11 @@ else:
         eligible = event.get("eligible_genres", [])
         if not eligible:
             return True
-        return any(genre.lower() in g.lower() or g.lower() in genre.lower() for g in eligible)
+        return any(
+            g_sel.lower() in g_elig.lower() or g_elig.lower() in g_sel.lower()
+            for g_sel in genres
+            for g_elig in eligible
+        )
 
     tentpoles = [e for e in upcoming if e["type"] == "tentpole"]
     themed    = [e for e in upcoming if e["type"] == "themed"]
@@ -401,8 +438,9 @@ else:
             st.session_state.pop(f"depth_{ev['name']}", None)
 
     if eligible_themed:
-        st.markdown(f"### 🎪 Genre-Eligible Themed Fests ({len(eligible_themed)} for {genre})")
-        st.caption("Fests where your genre qualifies. Themed fests can meaningfully boost discovery.")
+        genre_label = " / ".join(genres)
+        st.markdown(f"### 🎪 Genre-Eligible Themed Fests ({len(eligible_themed)} for {genre_label})")
+        st.caption("Fests where at least one of your genres qualifies. Themed fests can meaningfully boost discovery.")
 
         for ev in eligible_themed:
             duration = (ev["end_date"] - ev["start_date"]).days
@@ -522,7 +560,7 @@ st.subheader("📋 Decision Summary")
 asp_factor = get_asp_factor(tier, sentiment)
 summary_rows = [
     ("Game",              game_name or "—"),
-    ("Tier / Genre",      f"{TIER_LABELS[tier]} · {genre}"),
+    ("Tier / Genre",      f"{TIER_LABELS[tier]} · {' / '.join(genres)}"),
     ("Base Launch Price", f"${base_price:.2f}"),
     ("Revenue-Max Price", f"${best_tier.price:.2f}"),
     ("P50 Units",         fmt_units(units_p50)),
@@ -540,6 +578,7 @@ st.dataframe(summary_df, hide_index=True, use_container_width=True)
 
 st.caption(
     "💡 Net revenue = units × blended ASP × 70% Steam share × 88% VAT factor. "
-    "ASP = launch price × blended factor (accounts for year-1 discount events and regional pricing). "
-    "Source: Steam Boxleiter calibration (Launch Ledger, Apr 2026)."
+    "ASP factor is a static calibration from benchmark titles (Launch Ledger, Apr 2026) — "
+    "it approximates the effect of seasonal discounts, regional pricing, and refunds on year-1 realized price. "
+    "Elasticity is a model assumption; adjust it in the sidebar to reflect your audience's price sensitivity."
 )
