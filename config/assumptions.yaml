@@ -1,0 +1,784 @@
+# ============================================================================
+# STEAM FORECASTING LAB — MODEL ASSUMPTIONS
+# ============================================================================
+# Every tunable parameter in the estimation and forecast engine lives here.
+# Labels on each parameter indicate the source of the assumption:
+#   [observed]   — derived from published public data or API fact
+#   [heuristic]  — industry convention / rule of thumb, calibrated estimate
+#   [user]       — set by the user, no external backing
+#
+# Edit freely. All values flow into the engine — nothing is hardcoded.
+# ============================================================================
+
+
+# ----------------------------------------------------------------------------
+# REVIEW-TO-SALES MULTIPLIERS (Boxleiter / review proxy method)
+# ----------------------------------------------------------------------------
+# Interpretation: estimated_total_units = total_reviews × multiplier
+# Source [heuristic]: Based on Boxleiter (2014), Simon Carless (2020-2024),
+#   and widely-cited industry convention. Significant variance — treat outputs
+#   as ranges, not point estimates.
+#
+# Structure: base multiplier + plausible range [low, high]
+# Quality tiers: indie = small team / solo dev; aa = mid-tier studio; aaa = large studio
+# ----------------------------------------------------------------------------
+review_multipliers:
+
+  # By quality tier (applied as the starting multiplier)
+  quality_tiers:
+    indie:
+      label: "Indie (small team / solo dev, typically $4.99–$29.99)"
+      base: 30
+      range: [20, 50]
+    aa:
+      label: "AA (mid-tier studio, typically $19.99–$49.99)"
+      base: 45
+      range: [30, 70]
+    aa_plus:
+      label: "AA+ (upper mid-tier / Expedition 33 tier, typically $49.99–$79.99)"
+      base: 52                  # [heuristic] Between AA (45) and AAA (60).
+      range: [35, 75]           # Calibrated 2026-04-02 from Avowed (GP, $69.99/$89.99 multi-SKU).
+      note: >
+        AA+ covers well-funded mid-tier studios with strong production values but
+        without AAA marketing budgets. Examples: Obsidian (Avowed), Clair Obscur:
+        Expedition 33, Grounded. Distinct from AAA which implies blockbuster-scale
+        marketing and distribution. Use this tier when a game would feel out of place
+        at both AA ($29.99 pricing) and full AAA ($69.99+ with heavy marketing).
+    aaa:
+      label: "AAA (large studio / blockbuster, typically $59.99–$79.99)"
+      base: 60
+      range: [40, 100]
+
+  # Genre adjustment multipliers (applied on top of quality tier base)
+  # Source [heuristic]: Single-player narrative games see higher review rates;
+  #   multiplayer/social games see lower rates (players don't review as often).
+  genre_adjustments:
+    "Action":                   1.0
+    "Action-Adventure":         1.05
+    "Action RPG":               1.1
+    "Adventure":                1.1
+    "Battle Royale":            0.55   # multiplayer — low review rate per owner
+    "City Builder":             0.9
+    "Co-op Shooter":            0.65
+    "Extraction Shooter":       0.6
+    "FPS":                      0.75
+    "Fighting":                 0.85
+    "Horror / Survival Horror": 1.15   # high review propensity genre
+    "Immersive Sim":            1.15
+    "Life Sim":                 0.95
+    "Looter Shooter":           0.7
+    "MMORPG":                   0.6
+    "MOBA":                     0.55
+    "Metroidvania":             1.1
+    "Open World RPG":           1.15
+    "Platformer":               1.0
+    "Puzzle":                   1.0
+    "Racing":                   0.85
+    "Real-Time Strategy (RTS)": 0.9
+    "Rhythm":                   0.95
+    "Roguelike / Roguelite":    1.05
+    "Role-Playing (JRPG)":      1.2
+    "Role-Playing (WRPG)":      1.15
+    "Sandbox / Survival Craft": 0.8    # large owner bases, low review rate
+    "Simulation":               0.9
+    "Soulslike":                1.1
+    "Sports":                   0.8
+    "Stealth":                  1.05
+    "Strategy (4X / Grand Strategy)": 0.58   # [heuristic] Niche genre — low review propensity per owner.
+                                              # 4X players buy but rarely review. Calibrated 2026-04-02:
+                                              # Ara (with pre-order) implied 27.0x / AA base 45 / lang 1.04
+                                              # => compound needed = 0.60 => genre adj = 0.58 (was 0.47/0.95).
+                                              # NOTE: requires multiplier_compound_cap.max_penalty_factor <= 0.60
+                                              # to take effect — compound cap floor was also lowered accordingly.
+    "Tactical RPG / Strategy":  1.0
+    "Third-Person Shooter":     0.8
+    "Tower Defense":            0.95
+    "Turn-Based RPG":           1.15
+    "Turn-Based Strategy":      1.0
+    "Visual Novel":             1.3    # highest review propensity genre
+    "Other":                    1.0
+
+
+# ----------------------------------------------------------------------------
+# SENTIMENT ADJUSTMENT
+# ----------------------------------------------------------------------------
+# Review sentiment (% positive) modifies the multiplier.
+# Logic: games with strong word-of-mouth get more organic sales per review.
+# Source [heuristic]
+# ----------------------------------------------------------------------------
+sentiment_adjustment:
+  # Sentiment thresholds → adjustment multiplier
+  overwhelmingly_positive:    # 95%+ positive
+    threshold: 0.95
+    multiplier_adj: 1.20
+    label: "Overwhelmingly Positive"
+  very_positive:              # 85–94%
+    threshold: 0.85
+    multiplier_adj: 1.10
+    label: "Very Positive"
+  mostly_positive:            # 70–84%
+    threshold: 0.70
+    multiplier_adj: 1.00
+    label: "Mostly Positive"
+  mixed:                      # 40–69%
+    threshold: 0.40
+    multiplier_adj: 0.85
+    label: "Mixed"
+  mostly_negative:            # <40%
+    threshold: 0.0
+    multiplier_adj: 0.70
+    label: "Mostly/Overwhelmingly Negative"
+
+
+# ----------------------------------------------------------------------------
+# METACRITIC ADJUSTMENT
+# ----------------------------------------------------------------------------
+# Metacritic score modifies the multiplier when available.
+# Source [heuristic]: Higher critical scores correlate with stronger word-of-mouth.
+# ----------------------------------------------------------------------------
+metacritic_adjustment:
+  enabled: true
+  tiers:
+    - min_score: 90
+      multiplier_adj: 1.15
+    - min_score: 80
+      multiplier_adj: 1.05
+    - min_score: 70
+      multiplier_adj: 1.00
+    - min_score: 60
+      multiplier_adj: 0.95
+    - min_score: 0
+      multiplier_adj: 0.90
+
+
+# ----------------------------------------------------------------------------
+# LANGUAGE / REACH ADJUSTMENT
+# ----------------------------------------------------------------------------
+# More supported languages → broader potential market reach.
+# Source [heuristic]
+# ----------------------------------------------------------------------------
+language_adjustment:
+  enabled: true
+  tiers:
+    - min_languages: 15
+      multiplier_adj: 1.08
+    - min_languages: 10
+      multiplier_adj: 1.04
+    - min_languages: 5
+      multiplier_adj: 1.00
+    - min_languages: 0
+      multiplier_adj: 0.95
+
+
+# ----------------------------------------------------------------------------
+# DLC PRESENCE ADJUSTMENT
+# ----------------------------------------------------------------------------
+# Games with DLC tend to have more engaged owner bases and better discovery.
+# Source [heuristic]
+# ----------------------------------------------------------------------------
+dlc_adjustment:
+  enabled: true
+  tiers:
+    - min_dlc_count: 5
+      multiplier_adj: 1.10
+    - min_dlc_count: 1
+      multiplier_adj: 1.04
+    - min_dlc_count: 0
+      multiplier_adj: 1.00
+
+
+# ----------------------------------------------------------------------------
+# CCU-BASED CROSS-CHECK (sanity check only — low confidence)
+# ----------------------------------------------------------------------------
+# Current CCU → very rough owner estimate. Used ONLY to flag if review-based
+# estimate looks wildly wrong. Not used as a primary method.
+# Source [heuristic]: Widely cited ratios but with enormous variance.
+# ----------------------------------------------------------------------------
+ccu_crosscheck:
+  enabled: true
+  confidence: "low"
+  note: "CCU cross-check is a sanity signal only. Do not weight against review estimate."
+  # Ratio: current CCU ÷ ratio = rough implied owner count
+  # Single-player games: CCU collapses after launch; ratio is very low
+  # Multiplayer games: CCU stays higher relative to owner count
+  single_player_ccu_to_owners: 0.007   # 1 CCU per ~143 owners
+  multiplayer_ccu_to_owners:   0.020   # 1 CCU per ~50 owners
+
+
+# ----------------------------------------------------------------------------
+# STEAMCHARTS HISTORICAL CCU (secondary cross-check — scrape, fragile)
+# ----------------------------------------------------------------------------
+# SteamCharts provides monthly average CCU history by app.
+# LEGAL NOTE: Third-party scrape of steamcharts.com — fragile, may break,
+#   not officially sanctioned. Treat as optional enrichment only.
+# ----------------------------------------------------------------------------
+steamcharts:
+  enabled: true
+  note: "Third-party scrape. May break without warning. Treat as enrichment only."
+  # Peak launch month CCU → very rough launch units proxy
+  launch_ccu_to_launch_units: 3.5   # 1 peak CCU ≈ 3.5 launch-month units [heuristic]
+
+
+# ----------------------------------------------------------------------------
+# LAUNCH CURVE PARAMETERS (default — overridden by comp set fitting)
+# ----------------------------------------------------------------------------
+# When no comp set curve fit is available, fall back to these defaults.
+# The curve models: f(month) = A * exp(-decay * (month-1)) + floor_share
+# Source [heuristic]: Calibrated against Steam benchmark data.
+#
+# CALIBRATION NOTE (2026-03-31):
+#   Original single default of 35% month-1 was too low for AA/AAA titles.
+#   Benchmarks show:
+#     - Manor Lords:  ~60-70% year-1 sales in month 1 (breakout)
+#     - AAA ports:    ~45-55% in month 1 (strong front-load)
+#     - Typical AA:   ~40-50% in month 1
+#     - Typical indie:~30-40% in month 1 (more word-of-mouth driven)
+#   Using tier-specific defaults now. Comp fitting overrides these.
+# ----------------------------------------------------------------------------
+launch_curve_defaults:
+  month_1_share: 0.35        # fallback if tier not found
+  decay_rate:    0.45
+  floor_share:   0.020
+
+  # Tier-specific overrides (used by CurveFitter when no comp data)
+  # Source [heuristic] — calibrated from benchmark data + user validated actuals (2026-04-02)
+  # WITH-PRE-ORDER data reveals much heavier Mo1 front-loading than previously modeled:
+  #   Avowed (AA+, GP):      67.8% Mo1 share
+  #   Ara (AA, strategy):    61.3% Mo1 share
+  #   South of Midnight (AAA): 46.6% Mo1 share (lower — less pre-order momentum)
+  by_tier:
+    indie:
+      month_1_share: 0.33    # ~33% — gradual, word-of-mouth driven; minimal pre-order activity
+      decay_rate:    0.40
+      floor_share:   0.022
+    aa:
+      month_1_share: 0.60    # ~60% — [recalibrated] AA with pre-orders front-loads more than expected
+      decay_rate:    0.52
+      floor_share:   0.015
+    aa_plus:
+      month_1_share: 0.65    # ~65% — strong pre-order + day-1 GP conversion surge
+      decay_rate:    0.56
+      floor_share:   0.012
+    aaa:
+      month_1_share: 0.50    # ~50% — unchanged; SoM (46.6%) is close to this default
+      decay_rate:    0.52
+      floor_share:   0.015
+
+
+# ----------------------------------------------------------------------------
+# DISCOUNT LIFT FACTORS
+# ----------------------------------------------------------------------------
+# How much do discount events multiply baseline daily unit sales?
+# Source [heuristic]: Widely observed Steam sale lift ranges.
+#   Smaller discounts → modest lift; deeper discounts → larger but shorter lift.
+# These are BENCHMARK values. Actual results vary significantly.
+# ----------------------------------------------------------------------------
+discount_lift:
+  pct_10:
+    lift_factor: 1.5
+    label: "10% off"
+  pct_15:
+    lift_factor: 1.8
+    label: "15% off"
+  pct_20:
+    lift_factor: 2.2
+    label: "20% off"
+  pct_25:
+    lift_factor: 2.8
+    label: "25% off"
+  pct_30:
+    lift_factor: 3.2
+    label: "30% off"
+  pct_33:
+    lift_factor: 3.6
+    label: "33% off"
+  pct_40:
+    lift_factor: 4.5
+    label: "40% off"
+  pct_50:
+    lift_factor: 6.0
+    label: "50% off"
+  pct_60:
+    lift_factor: 8.0
+    label: "60% off"
+  pct_75:
+    lift_factor: 11.0
+    label: "75% off"
+
+  # Post-sale decay: after a discount ends, sales get a small halo effect
+  # then return to baseline. Modeled as linear decay over N days.
+  post_sale_halo_days: 3
+  post_sale_halo_multiplier: 1.3   # residual lift on day 1 after sale ends
+
+
+# ----------------------------------------------------------------------------
+# ASP YEAR-1 BLENDED FACTOR  (CALIBRATION FIX — added 2026-03-31)
+# ----------------------------------------------------------------------------
+# The model previously calculated revenue as: units × full_MSRP
+# This was WRONG. Real year-1 ASP is typically 60–80% of launch MSRP because:
+#   1. Games run 20–75% discounts multiple times in year 1
+#   2. Regional pricing means non-US buyers pay less than US MSRP
+#   3. Refunds reduce net realized revenue
+#
+# Calibration evidence:
+#   Avowed ($49.99 AAA):  model $43M → corrected $27M  (63% ASP)
+#   Hellblade 2 ($49.99): model $34M → corrected $21M  (60% ASP)
+#   South of Midnight ($39.99): model $10M → corrected $7M (68% ASP)
+#   Ara ($49.99, mixed):  model $4.5M → corrected $2.2M (48% ASP)
+#   Keeper ($29.99, indie): model $1M → corrected $0.8M  (82% ASP)
+#
+# Source [heuristic]: Calibrated from benchmark comp set analysis.
+# Rule: Blended ASP ≈ 60–75% of MSRP (per benchmark global rule in prompt).
+# ----------------------------------------------------------------------------
+asp_year1_blended:
+
+  # By tier and sentiment quality
+  # sentiment_good = >= 70% positive; sentiment_mixed = < 70% positive
+  #
+  # RECALIBRATED 2026-04-02 using with-pre-order actuals:
+  #   Ara ($49.99 AA):   $3.002M / 59.5K units = $50.45/unit = 100.9% of MSRP
+  #   SoM ($39.99 AAA):  $4.36M / 118K units   = $36.95/unit = 92.4% of MSRP
+  #   Keeper ($29.99):   $685K / 25K units      = $27.40/unit = 91.4% of MSRP
+  #   AoMR ($29.99/$49.99 blended $39.19): revenue / units ≈ 100% blended ASP
+  # These are gross revenue figures at near-MSRP prices (minimal year-1 discounting in user model).
+  # Previous values (0.50–0.80) modeled developer NET after heavy discount blending — now corrected.
+  by_tier:
+    indie:
+      sentiment_good:   0.92   # minimal discounting in year 1 for popular indie
+      sentiment_mixed:  0.82
+    aa:
+      sentiment_good:   0.95   # calibrated: Ara ~101% of MSRP gross
+      sentiment_mixed:  0.88
+    aa_plus:
+      sentiment_good:   0.95   # strong launch pricing; multi-SKU uplift captured in blended price
+      sentiment_mixed:  0.88
+    aaa:
+      sentiment_good:   0.93   # SoM 92.4%; minor regional discount impact
+      sentiment_mixed:  0.85
+
+  # Age of title at time of estimate (months since release)
+  # Young titles haven't had time to discount as aggressively yet
+  age_adjustment:
+    young_threshold_months: 6
+    young_boost: 0.08         # add 8% to ASP factor if title is < 6 months old
+    mature_threshold_months: 18
+    mature_penalty: 0.00      # no adjustment 6–18 months
+    old_penalty: -0.05        # subtract 5% if > 18 months (heavy discounting history)
+
+  # Game Pass / subscription flag
+  # Game Pass titles on Steam may discount differently — effect is uncertain.
+  # We apply no systematic ASP adjustment for Game Pass, but flag confidence.
+  game_pass_note: >
+    Game Pass titles have uncertain ASP dynamics. They may discount less
+    (Microsoft doesn't need Steam revenue) or more (driving purchases from GP players).
+    No ASP adjustment applied; widen confidence bands instead.
+
+  # Sentiment-to-ASP override: Mixed/Negative sentiment forces ASP floor
+  # These games must discount heavily to move units at all.
+  sentiment_asp_floor:
+    mostly_negative_threshold: 0.55   # below 55% positive → apply floor
+    floor_factor: 0.45                # ASP can't go below 45% of MSRP
+
+
+# ----------------------------------------------------------------------------
+# VOLUME-SCALED MULTIPLIER DECAY  (CALIBRATION FIX — added 2026-03-31)
+# ----------------------------------------------------------------------------
+# The benchmark analysis revealed the flat-tier Boxleiter multiplier massively
+# overestimates games with very high review counts.
+#
+# ROOT CAUSE: At scale, mainstream/casual buyers make up an increasing share of
+# the owner base. These buyers have much lower review propensity than the
+# enthusiast-first audience that dominates small/mid games.
+#
+# Benchmark evidence (implied real-world multipliers):
+#   Black Myth: Wukong  (1.197M reviews, AAA): 16.7x actual vs 75.0x model  → +349% error
+#   Helldivers 2        (1.050M reviews, AA):  11.4x actual vs 33.8x model  → +321% error
+#   Baldur's Gate 3     (  825K reviews, AAA): 22.8x actual vs 75.0x model  → +229% error
+#   Lethal Company      (  503K reviews, indie): 35.8x actual vs 22.5x model → -37% error (inverse!)
+#
+# KEY INSIGHT: The decay is tier-specific.
+#   - AAA titles: strong decay — large casual buyer pools, heavy marketing reach
+#   - AA titles: moderate decay — mainstream crossover at >200K reviews
+#   - Indie titles: mild decay — viral indie hits keep high review propensity
+#     (enthusiast audiences who DO review spread these titles)
+#
+# Decay is applied multiplicatively AFTER the compound adjustment cap:
+#   effective_mult = base_mult × compound_adjustment × volume_decay × flag_adjustments
+#
+# Source [heuristic]: Calibrated from 2026-03-31 benchmark comp set.
+# ----------------------------------------------------------------------------
+volume_scaled_multiplier:
+  enabled: true
+
+  by_tier:
+    indie:
+      note: >
+        Viral indie hits spread through enthusiast gaming communities that review.
+        Mild decay applied only at extreme scale (500K+ reviews).
+        Co-op Shooter genre adj (0.65x) is already aggressive for indie — don't double-penalize.
+      thresholds:
+        - max_reviews: 100000      # < 100K: full multiplier
+          decay_factor: 1.00
+        - max_reviews: 500000      # 100K–500K: 5% decay (mainstream creep)
+          decay_factor: 0.95
+        - max_reviews: 99999999    # > 500K: 15% decay (viral/breakout scale)
+          decay_factor: 0.85
+
+    aa:
+      note: >
+        Mid-tier AA games begin losing review propensity at 10K+.
+        Mainstream audience grows faster than for indie. Calibration anchor:
+        Age of Mythology Retold (21,465 reviews, 55.6x base) → 0.78 decay → 931K Mo12 units (+0%).
+        Higher thresholds scaled proportionally (×0.78) to maintain monotone decay.
+      thresholds:
+        - max_reviews: 10000       # < 10K: full multiplier (small-scale AA / niche titles)
+          decay_factor: 1.00
+        - max_reviews: 50000       # 10K–50K: decay begins; calibrated on AoMR 21K reviews
+          decay_factor: 0.78
+        - max_reviews: 200000      # 50K–200K: continued decay (scaled from prior 0.90)
+          decay_factor: 0.70
+        - max_reviews: 500000      # 200K–500K (scaled from 0.70)
+          decay_factor: 0.55
+        - max_reviews: 1000000     # 500K–1M (scaled from 0.45)
+          decay_factor: 0.35
+        - max_reviews: 99999999    # > 1M (scaled from 0.32)
+          decay_factor: 0.25
+
+    aa_plus:
+      note: >
+        AA+ sits between AA and AAA in scale. Moderate decay, slightly steeper than AA.
+        Added 2026-04-02 for titles like Avowed and Clair Obscur: Expedition 33.
+      thresholds:
+        - max_reviews: 50000
+          decay_factor: 1.00
+        - max_reviews: 200000
+          decay_factor: 0.87
+        - max_reviews: 500000
+          decay_factor: 0.65
+        - max_reviews: 1000000
+          decay_factor: 0.42
+        - max_reviews: 99999999
+          decay_factor: 0.29
+
+    aaa:
+      note: >
+        AAA titles have the largest casual buyer pools — strong decay at any notable scale.
+        Heavy marketing funnels in non-reviewers. Review propensity falls steeply.
+        Calibrated: BG3 (825K → 0.40x), Black Myth (1.2M → 0.27x) hit within 25% of actual.
+      thresholds:
+        - max_reviews: 50000       # < 50K: full multiplier (niche AAA or ports)
+          decay_factor: 1.00
+        - max_reviews: 200000      # 50K–200K: 15% decay
+          decay_factor: 0.85
+        - max_reviews: 500000      # 200K–500K: 40% decay
+          decay_factor: 0.60
+        - max_reviews: 1000000     # 500K–1M: 60% decay
+          decay_factor: 0.40
+        - max_reviews: 99999999    # > 1M: 73% decay (Black Myth / Helldivers territory)
+          decay_factor: 0.27
+
+
+# ----------------------------------------------------------------------------
+# COMPOUND ADJUSTMENT CAP  (CALIBRATION FIX — added 2026-03-31)
+# ----------------------------------------------------------------------------
+# The original model stacked genre × sentiment × metacritic × language × DLC
+# adjustments multiplicatively, which could compound to unrealistic levels.
+# Example: 60x base × 1.1 genre × 1.1 sentiment × 1.05 language × 1.04 DLC
+#          = 60x × 1.33 = 80x — a 33% boost that may not be supported.
+#
+# Calibration evidence: Hellblade 2 reached 77.8x effective (30% above 60x base).
+# Cap at ±25% of base multiplier to prevent runaway compounding.
+# Source [heuristic]
+# ----------------------------------------------------------------------------
+multiplier_compound_cap:
+  enabled: true
+  max_boost_factor: 1.25    # compound adjustments cannot add more than +25% to base
+  max_penalty_factor: 0.60  # [recalibrated 2026-04-02] Allow up to 40% downward adjustment.
+                             # Required for niche genres (4X/Grand Strategy 0.58x) to take effect.
+                             # Previous value 0.75 silently overrode the 4X genre adjustment.
+
+
+# ----------------------------------------------------------------------------
+# SPECIAL DISTORTION FLAGS  (CALIBRATION FIX — added 2026-03-31)
+# ----------------------------------------------------------------------------
+# These flags modify model behavior and confidence levels.
+# Source [heuristic + observed]
+# ----------------------------------------------------------------------------
+distortion_flags:
+
+  game_pass:
+    label: "Xbox Game Pass Day-1"
+    description: >
+      Title was available on Xbox Game Pass on or near launch day.
+      GP subscribers play without buying on Steam — only ~25% of the player base
+      converts to a Steam purchase. This SUPPRESSES Steam unit counts significantly
+      relative to a non-GP title with the same review count.
+      Steam reviews come from the small subset of GP players who also buy on Steam.
+      That subset is still correlated to Steam purchases, but the denominator (total
+      reach) is far larger than the Boxleiter model assumes.
+    unit_multiplier_adjustment: 0.39   # [heuristic] Steam unit suppression factor.
+                                       # Recalibrated 2026-04-02 using WITH-PRE-ORDER targets + AA+ tier:
+                                       #   Avowed (AA+, $69.99/$89.99): 25.1x implied / 62.2x pre-GP = 0.404x
+                                       #   South of Midnight (AAA):     26.9x implied / 71.8x pre-GP = 0.375x
+                                       #   Average => 0.39x.
+                                       # Previous value 0.27 was calibrated to no-pre-order targets — too low.
+    confidence_band_multiplier: 1.50   # widen uncertainty bands by 50%
+    revenue_note: >
+      Steam revenue is NOT total revenue. Game Pass royalties + Xbox Store sales
+      are additional revenue streams not captured here. This model estimates
+      Steam-channel revenue only.
+
+  short_game:
+    label: "Short Game (< 10 hours)"
+    description: >
+      Games under ~10 hours have elevated Steam refund rates (2-hour refund window
+      covers a significant fraction of the experience). Refunded buyers cannot review.
+      This means reviews-per-owner may be lower than typical, so the review-to-unit
+      multiplier may undercount total buyers. Effect is partially offset by smaller
+      potential buyer pool (players are more price-sensitive about short games).
+    unit_multiplier_adjustment: 1.10   # slight upward adjustment: more units per review
+    confidence_band_multiplier: 1.30   # widen bands (short game dynamics are harder to model)
+    asp_adjustment: -0.05              # lower ASP: refunds + value skepticism at high price
+
+  young_title:
+    label: "Young Title (< 12 months)"
+    description: >
+      Title has been on sale for fewer than 12 months. Current review count is a
+      partial-year snapshot, not a settled lifetime estimate. Unit estimate reflects
+      current sales-to-date, not projected year-1 total.
+    project_forward: true              # flag: UI should note this is partial-year only
+    confidence_band_multiplier: 1.40   # wider bands for incomplete data
+
+  early_access:
+    label: "Early Access"
+    description: >
+      Early Access titles have non-standard sales curves: sometimes a strong launch
+      spike (Palworld, Manor Lords), sometimes gradual accumulation. The Boxleiter
+      multiplier is less reliable because review behavior during EA differs from 1.0.
+    unit_multiplier_adjustment: 0.90   # slight downward: EA reviews sometimes inflate
+    confidence_band_multiplier: 1.60   # widen bands significantly
+
+
+# ----------------------------------------------------------------------------
+# PLATFORM ECONOMICS
+# ----------------------------------------------------------------------------
+# Source [observed]: Steam standard revenue share is 30% (developer keeps 70%).
+#   Tiered at $10M and $50M revenue milestones, but prototype uses standard rate.
+# VAT is estimated as a global average — actual varies by region.
+# ----------------------------------------------------------------------------
+platform:
+  steam_revenue_share: 0.70    # developer keeps 70% of gross Steam revenue
+  vat_assumption_global: 0.88  # rough average net of ~12% blended VAT globally
+  note: >
+    Net developer revenue ≈ gross_revenue × steam_revenue_share × vat_assumption.
+    Actual VAT depends heavily on regional sales mix. Treat as directional only.
+
+
+# ----------------------------------------------------------------------------
+# PERFORMANCE SCENARIOS
+# ----------------------------------------------------------------------------
+# Scale factors applied to the base (comp-fitted) unit estimate.
+# Source [user]: Intentionally subjective — designed to bracket outcomes.
+# ----------------------------------------------------------------------------
+performance_scenarios:
+  below_expectations:
+    label: "Below Expectations"
+    scale: 0.45
+    description: "Launches softly — below comp set median. Weak launch visibility, reviews slow to build."
+    color: "#E05C5C"
+  at_expectations:
+    label: "At Expectations"
+    scale: 1.00
+    description: "Performs in line with comp set median. Typical launch trajectory for the genre."
+    color: "#5B9BD5"
+  above_expectations:
+    label: "Above Expectations"
+    scale: 2.20
+    description: "Strong launch — top quartile of comp set. Strong reviews, visibility, word-of-mouth."
+    color: "#70AD47"
+
+
+# ----------------------------------------------------------------------------
+# DISCOUNT STRATEGY CALENDARS (12-month)
+# ----------------------------------------------------------------------------
+# Three pre-set discount strategies. Each is a list of events:
+#   month: 1-12 (month of launch = month 1)
+#   discount_pct: integer discount percentage
+#   duration_days: how long the sale runs
+#   label: display name
+# Source [heuristic + user]: Modeled on observed Steam sale ladder behavior.
+# These are starting points — user can edit in the Scenario Planner.
+# ----------------------------------------------------------------------------
+discount_strategies:
+
+  conservative:
+    label: "Conservative"
+    description: "Protect price integrity. Minimal discounting in year 1. Max 25% off."
+    color: "#70AD47"
+    events:
+      - month: 3
+        discount_pct: 10
+        duration_days: 7
+        label: "Early discount"
+      - month: 6
+        discount_pct: 20
+        duration_days: 14
+        label: "Mid-year sale"
+      - month: 12
+        discount_pct: 25
+        duration_days: 14
+        label: "Year-end sale"
+
+  normal:
+    label: "Normal"
+    description: "Standard indie discount ladder. Balances revenue and unit volume."
+    color: "#5B9BD5"
+    events:
+      - month: 1
+        discount_pct: 10
+        duration_days: 7
+        label: "Launch week"
+      - month: 3
+        discount_pct: 25
+        duration_days: 14
+        label: "Spring sale"
+      - month: 6
+        discount_pct: 33
+        duration_days: 14
+        label: "Summer sale"
+      - month: 9
+        discount_pct: 40
+        duration_days: 14
+        label: "Autumn sale"
+      - month: 12
+        discount_pct: 50
+        duration_days: 14
+        label: "Winter sale"
+
+  aggressive:
+    label: "Aggressive"
+    description: "Deep discounts early and often. Maximizes unit volume, compresses ASP."
+    color: "#E05C5C"
+    events:
+      - month: 1
+        discount_pct: 15
+        duration_days: 7
+        label: "Launch week"
+      - month: 2
+        discount_pct: 30
+        duration_days: 7
+        label: "First sale"
+      - month: 3
+        discount_pct: 40
+        duration_days: 14
+        label: "Spring sale"
+      - month: 6
+        discount_pct: 50
+        duration_days: 14
+        label: "Summer sale"
+      - month: 9
+        discount_pct: 60
+        duration_days: 14
+        label: "Autumn sale"
+      - month: 12
+        discount_pct: 75
+        duration_days: 7
+        label: "Winter flash"
+
+
+# ----------------------------------------------------------------------------
+# PRICE TIERS (for new game forecast input)
+# ----------------------------------------------------------------------------
+# Source [observed]: Standard Steam price points in $5 increments.
+# ----------------------------------------------------------------------------
+price_tiers:
+  - 4.99
+  - 9.99
+  - 14.99
+  - 19.99
+  - 24.99
+  - 29.99
+  - 34.99
+  - 39.99
+  - 44.99
+  - 49.99
+  - 54.99
+  - 59.99
+  - 64.99
+  - 69.99
+  - 74.99
+  - 79.99
+
+
+# ----------------------------------------------------------------------------
+# DATA COLLECTION SETTINGS
+# ----------------------------------------------------------------------------
+review_collection:
+  lookback_months: 24          # how far back to fetch review timestamps
+  max_reviews_to_fetch: 5000   # pagination cap to avoid bogging down on huge titles
+  cache_ttl_hours: 24          # how long to cache API responses locally
+  rate_limit_sleep_seconds: 0.6  # sleep between API calls to avoid rate limiting
+
+# ----------------------------------------------------------------------------
+# ESTIMATION CONFIDENCE FRAMEWORK
+# ----------------------------------------------------------------------------
+# Outputs are labeled with one of these confidence levels.
+# Users should treat all outputs as ranges, not facts.
+# ----------------------------------------------------------------------------
+confidence_levels:
+  high:
+    label: "Higher Confidence"
+    description: "Based on observed public data with limited assumptions."
+    color: "#70AD47"
+  medium:
+    label: "Medium Confidence"
+    description: "Derived metric with calibrated heuristic assumptions."
+    color: "#FFC000"
+  low:
+    label: "Lower Confidence"
+    description: "Speculative estimate. Treat as directional only."
+    color: "#E05C5C"
+
+# ----------------------------------------------------------------------------
+# GENRES LIST (for UI dropdowns — matches existing pricing tool taxonomy)
+# ----------------------------------------------------------------------------
+genres:
+  - "Action"
+  - "Action-Adventure"
+  - "Action RPG"
+  - "Adventure"
+  - "Battle Royale"
+  - "City Builder"
+  - "Co-op Shooter"
+  - "Extraction Shooter"
+  - "FPS"
+  - "Fighting"
+  - "Horror / Survival Horror"
+  - "Immersive Sim"
+  - "Life Sim"
+  - "Looter Shooter"
+  - "MMORPG"
+  - "MOBA"
+  - "Metroidvania"
+  - "Open World RPG"
+  - "Platformer"
+  - "Puzzle"
+  - "Racing"
+  - "Real-Time Strategy (RTS)"
+  - "Rhythm"
+  - "Roguelike / Roguelite"
+  - "Role-Playing (JRPG)"
+  - "Role-Playing (WRPG)"
+  - "Sandbox / Survival Craft"
+  - "Simulation"
+  - "Soulslike"
+  - "Sports"
+  - "Stealth"
+  - "Strategy (4X / Grand Strategy)"
+  - "Tactical RPG / Strategy"
+  - "Third-Person Shooter"
+  - "Tower Defense"
+  - "Turn-Based RPG"
+  - "Turn-Based Strategy"
+  - "Visual Novel"
+  - "Other"
