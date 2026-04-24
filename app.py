@@ -10,6 +10,7 @@ st.set_page_config(
 pages = [
     st.Page("pages/0_Comp_Set_Builder.py",  title="Comp Set Builder",  icon="🎯"),
     st.Page("pages/3_Revenue_Optimizer.py", title="Revenue Optimizer", icon="💰"),
+    st.Page("pages/2_Discount_Planner.py",  title="Discount Planner",  icon="🗓️"),
 ]
 
 pg = st.navigation(pages)
