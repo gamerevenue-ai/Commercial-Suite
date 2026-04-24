@@ -1,11 +1,12 @@
-# Steam Sale Calendar — Public Steamworks data
-# Source: store.steampowered.com/news/group/4145017 + Steamworks documentation
-# Seasonal sale dates confirmed from official Steamworks upcoming events page (April 2026)
-# Fest dates: from Steamworks upcoming events page (screenshot April 2026) + user-supplied Excel
-# Next Fest dates: approximate — Valve announces ~4 weeks before. Update when confirmed.
+# Steam Sale Calendar
+# Source of truth: Steamworks upcoming events page (screenshot Apr 2026) + user Excel
+# Thematic fest dates: Steamworks screenshot = source of truth for 2026
+# Seasonal sales 2025/2026: confirmed from Steamworks + user Excel
+# 2027: projected from historical pattern, labeled as estimates
+# Discount rules: Steamworks documentation (public)
 
 seasonal_sales:
-  2025:
+  "2025":
     - name: Spring Sale
       start: "2025-03-13"
       end: "2025-03-20"
@@ -34,7 +35,7 @@ seasonal_sales:
       typical_discount_range: [20, 75]
       notes: "Second-largest sale by revenue. Spans Christmas + New Year."
 
-  2026:
+  "2026":
     - name: Spring Sale
       start: "2026-03-19"
       end: "2026-03-26"
@@ -63,41 +64,68 @@ seasonal_sales:
       typical_discount_range: [20, 75]
       notes: "Confirmed from Steamworks upcoming events page"
 
-# Steam Next Fest — 3x per year. For unreleased games with demos.
-# Valve typically announces dates ~4 weeks prior. These are approximate windows.
+  "2027":
+    - name: Spring Sale
+      start: "2027-03-18"
+      end: "2027-03-25"
+      type: tentpole
+      typical_discount_range: [15, 50]
+      notes: "PROJECTED — estimated from 2025/2026 pattern (typically 3rd week of March)"
+
+    - name: Summer Sale
+      start: "2027-06-24"
+      end: "2027-07-08"
+      type: tentpole
+      typical_discount_range: [20, 67]
+      notes: "PROJECTED — estimated from 2025/2026 pattern (typically last week of June)"
+
+    - name: Autumn Sale
+      start: "2027-09-30"
+      end: "2027-10-07"
+      type: tentpole
+      typical_discount_range: [15, 50]
+      notes: "PROJECTED — estimated from 2025/2026 pattern (typically first week of October)"
+
+    - name: Winter Sale
+      start: "2027-12-16"
+      end: "2028-01-03"
+      type: tentpole
+      typical_discount_range: [20, 75]
+      notes: "PROJECTED — estimated from 2025/2026 pattern (typically mid-December through New Year)"
+
+# Steam Next Fest — 3x per year. For unreleased games with demos only.
 next_fest:
-  2026:
+  "2026":
     - name: Next Fest (February)
       start_approx: "2026-02-09"
       end_approx: "2026-02-16"
-      notes: "Approximate. Confirm on Steamworks when announced. For unreleased games with demos."
+      notes: "For unreleased games with demos. Confirm on Steamworks when announced."
 
     - name: Next Fest (June)
       start_approx: "2026-06-08"
       end_approx: "2026-06-15"
-      notes: "Approximate. Typically 1–2 weeks before Summer Sale."
+      notes: "Approximate. Typically 1-2 weeks before Summer Sale."
 
     - name: Next Fest (October)
       start_approx: "2026-10-12"
       end_approx: "2026-10-19"
       notes: "Approximate. Typically aligns with Autumn Sale window."
 
-# Themed Fests (Thematic Sales) — 2026
-# Source: Steamworks upcoming events page (confirmed April 2026 screenshot) + user Excel
-# Eligibility: game must match the theme. Discounted games prioritized but Coming Soon + demo also eligible.
-# Duration: typically 7 days unless noted.
+# Themed Fests 2026
+# Source: Steamworks upcoming events page screenshot (Apr 2026) — SOURCE OF TRUTH for dates
+# Eligibility: game must match the theme. Discounted + Coming Soon + demo all eligible.
 themed_fests_2026:
   - name: Detective Fest
-    start: "2026-01-12"
-    end: "2026-01-19"
-    eligible_genres: ["Adventure", "Puzzle", "Visual Novel", "Mystery"]
-    notes: "Mystery/detective games"
+    start: "2026-01-05"
+    end: "2026-01-12"
+    eligible_genres: ["Adventure", "Puzzle", "Visual Novel"]
+    notes: "Mystery/detective games. Source: user Excel (ended before Steamworks screenshot)."
 
   - name: Board Game Fest
-    start: "2026-01-26"
+    start: "2026-01-20"
     end: "2026-02-02"
-    eligible_genres: ["Strategy", "Puzzle", "Turn-Based Strategy", "Tabletop"]
-    notes: "Digital board games and tabletop adaptations"
+    eligible_genres: ["Strategy", "Puzzle", "Turn-Based Strategy"]
+    notes: "Digital board games and tabletop adaptations."
 
   - name: Typing Fest
     start: "2026-02-05"
@@ -108,26 +136,26 @@ themed_fests_2026:
   - name: "(Combat) PvP Fest"
     start: "2026-02-09"
     end: "2026-02-16"
-    eligible_genres: ["Fighting", "Battle Royale", "FPS", "Third-Person Shooter", "MOBA"]
-    notes: "Player vs player combat games"
+    eligible_genres: ["Fighting", "Battle Royale", "FPS", "Third-Person Shooter", "MOBA", "Co-op Shooter"]
+    notes: "Player vs player combat games."
 
   - name: Horse Fest
-    start: "2026-02-19"
+    start: "2026-02-16"
     end: "2026-02-23"
     eligible_genres: ["Simulation", "Sports", "Racing", "Adventure"]
-    notes: "5-day fest. Games featuring horses and Equidae family animals."
+    notes: "Games featuring horses and Equidae family animals."
 
   - name: Tower Defense Fest
     start: "2026-03-09"
     end: "2026-03-16"
     eligible_genres: ["Tower Defense", "Strategy"]
-    notes: "Stationary units protecting a base"
+    notes: "Stationary units protecting a base."
 
   - name: House & Home Fest
     start: "2026-03-30"
     end: "2026-04-06"
     eligible_genres: ["Simulation", "Life Sim", "City Builder", "Puzzle"]
-    notes: "Interior decoration, cleaning, renovation games"
+    notes: "Interior decoration, cleaning, renovation games."
 
   - name: Hidden Object Fest
     start: "2026-04-09"
@@ -138,26 +166,26 @@ themed_fests_2026:
   - name: Medieval Fest
     start: "2026-04-20"
     end: "2026-04-27"
-    eligible_genres: ["Action", "RPG", "Strategy", "Action-Adventure", "Soulslike"]
-    notes: "Games set in medieval times"
+    eligible_genres: ["Action", "Action-Adventure", "Action RPG", "Role-Playing (WRPG)", "Soulslike", "Strategy"]
+    notes: "Games set in medieval times."
 
   - name: Deckbuilders Fest
     start: "2026-05-04"
     end: "2026-05-11"
-    eligible_genres: ["Roguelike / Roguelite", "Strategy", "Turn-Based Strategy", "Card Game"]
-    notes: "Deck-building mechanics as primary loop"
+    eligible_genres: ["Roguelike / Roguelite", "Strategy", "Turn-Based Strategy", "Turn-Based RPG"]
+    notes: "Deck-building mechanics as primary loop."
 
   - name: Ocean Fest
     start: "2026-05-18"
     end: "2026-05-25"
-    eligible_genres: ["Adventure", "Simulation", "Action", "Survival/Crafting"]
-    notes: "Ocean-themed games, above or below water"
+    eligible_genres: ["Adventure", "Simulation", "Action", "Sandbox / Survival Craft"]
+    notes: "Ocean-themed games, above or below water."
 
   - name: Bullet Fest
     start: "2026-06-08"
-    end: "2026-06-15"
-    eligible_genres: ["Action", "Roguelike / Roguelite", "FPS", "Shooter"]
-    notes: "Bullet hell and bullet chaos games"
+    end: "2026-06-25"
+    eligible_genres: ["Action", "Roguelike / Roguelite", "FPS", "Action RPG"]
+    notes: "Bullet hell and bullet chaos games."
 
   - name: Social Deduction Fest
     start: "2026-07-13"
@@ -169,13 +197,13 @@ themed_fests_2026:
     start: "2026-07-20"
     end: "2026-07-27"
     eligible_genres: ["Simulation", "Strategy", "City Builder", "Puzzle"]
-    notes: "Trains and railways"
+    notes: "Trains and railways."
 
   - name: Cyberpunk Fest
     start: "2026-08-03"
     end: "2026-08-10"
-    eligible_genres: ["Action", "Action RPG", "FPS", "Adventure", "Sci-Fi"]
-    notes: "Neon, advanced tech, cyberpunk aesthetic"
+    eligible_genres: ["Action", "Action RPG", "FPS", "Adventure", "Action-Adventure"]
+    notes: "Neon, advanced tech, cyberpunk aesthetic."
 
   - name: Pins & Pegs Fest
     start: "2026-08-17"
@@ -186,8 +214,8 @@ themed_fests_2026:
   - name: PvE Survival Crafting Fest
     start: "2026-08-31"
     end: "2026-09-07"
-    eligible_genres: ["Sandbox / Survival Craft", "Survival/Crafting", "Open World", "Co-op"]
-    notes: "Survival + crafting with PvE primary loop"
+    eligible_genres: ["Sandbox / Survival Craft", "Open World RPG", "Action", "Co-op Shooter"]
+    notes: "Survival + crafting with PvE primary loop."
 
   - name: Programming Fest
     start: "2026-09-10"
@@ -198,32 +226,32 @@ themed_fests_2026:
   - name: Party-Based RPG Fest
     start: "2026-09-14"
     end: "2026-09-21"
-    eligible_genres: ["Role-Playing (JRPG)", "Role-Playing (WRPG)", "Tactical RPG / Strategy", "Turn-Based RPG"]
-    notes: "Multiple playable characters in one party"
+    eligible_genres: ["Role-Playing (JRPG)", "Role-Playing (WRPG)", "Tactical RPG / Strategy", "Turn-Based RPG", "Action RPG"]
+    notes: "Multiple playable characters in one party."
 
   - name: Cooking Fest
     start: "2026-10-12"
     end: "2026-10-19"
     eligible_genres: ["Simulation", "Casual", "Life Sim", "Puzzle"]
-    notes: "Cooking, feeding, restaurant management"
+    notes: "Cooking, feeding, restaurant management."
 
   - name: Steam Scream V
     start: "2026-10-26"
     end: "2026-11-02"
-    eligible_genres: ["Horror / Survival Horror", "Action", "Adventure"]
-    notes: "Halloween-centric. Horror genre only."
+    eligible_genres: ["Horror / Survival Horror", "Action", "Adventure", "Action-Adventure"]
+    notes: "Halloween-centric. Horror genre prioritized."
 
   - name: Auto-Battler RPG Fest
     start: "2026-11-16"
     end: "2026-11-23"
-    eligible_genres: ["Strategy", "Roguelike / Roguelite", "Turn-Based Strategy"]
-    notes: "Auto-battler mechanics: battles play out automatically"
+    eligible_genres: ["Strategy", "Roguelike / Roguelite", "Turn-Based Strategy", "Turn-Based RPG"]
+    notes: "Auto-battler mechanics: battles play out automatically."
 
-# Discount rules (from Steamworks documentation — public)
+# Discount rules (Steamworks documentation — public)
 discount_rules:
-  cooldown_days: 30          # Minimum days between discounts on Steam
-  new_release_window_days: 30 # Can't discount within 30 days of launch
-  seasonal_sale_min_pct: 10  # Minimum discount to appear in seasonal sale feed
-  max_discount_pct: 90       # Steam caps discounts at 90%
-  intro_offer_max_pct: 10    # Launch week intro offer capped at 10% for first 30 days
-  typical_first_discount: 20 # Most studios do 20-33% for first major sale
+  cooldown_days: 30
+  new_release_window_days: 30
+  seasonal_sale_min_pct: 10
+  max_discount_pct: 90
+  intro_offer_max_pct: 10
+  typical_first_discount: 20

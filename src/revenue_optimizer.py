@@ -20,7 +20,58 @@ STEAM_PRICE_TIERS = [4.99, 9.99, 14.99, 19.99, 24.99, 29.99, 34.99, 39.99, 49.99
 # Default price elasticity of demand for games on Steam.
 # -0.8 = a 10% price increase → ~8% fewer units sold (slightly inelastic).
 # Research range: -0.5 (premium/niche) to -1.5 (mass market).
-DEFAULT_ELASTICITY = -0.8
+DEFAULT_ELASTICITY = -1.0   # Updated default: mid-range, reflects typical indie/AA Steam game
+
+# Genre-specific elasticity defaults.
+# Mass-market / competitive genres: buyers are more price-sensitive → more negative.
+# Niche / enthusiast genres: buyers are less price-sensitive → closer to 0.
+# Source: [heuristic] calibrated from Steam pricing research + comp set analysis.
+GENRE_ELASTICITY_DEFAULTS: dict[str, float] = {
+    "Action":                        -1.1,
+    "Action-Adventure":              -1.1,
+    "Action RPG":                    -1.1,
+    "Adventure":                     -0.9,
+    "Battle Royale":                 -1.5,   # extremely price sensitive — free-to-play competition
+    "City Builder":                  -0.8,
+    "Co-op Shooter":                 -1.3,
+    "Extraction Shooter":            -1.4,
+    "FPS":                           -1.3,
+    "Fighting":                      -1.0,
+    "Horror / Survival Horror":      -0.9,
+    "Immersive Sim":                 -0.8,
+    "Life Sim":                      -0.9,
+    "Looter Shooter":                -1.3,
+    "MMORPG":                        -1.2,
+    "MOBA":                          -1.4,
+    "Metroidvania":                  -1.0,
+    "Open World RPG":                -1.1,
+    "Platformer":                    -1.0,
+    "Puzzle":                        -0.9,
+    "Racing":                        -1.1,
+    "Real-Time Strategy (RTS)":      -0.8,
+    "Rhythm":                        -0.9,
+    "Roguelike / Roguelite":         -1.0,
+    "Role-Playing (JRPG)":           -0.8,
+    "Role-Playing (WRPG)":           -0.9,
+    "Sandbox / Survival Craft":      -1.3,
+    "Simulation":                    -0.8,
+    "Soulslike":                     -0.9,
+    "Sports":                        -1.1,
+    "Stealth":                       -0.9,
+    "Strategy (4X / Grand Strategy)": -0.6,
+    "Tactical RPG / Strategy":       -0.7,
+    "Third-Person Shooter":          -1.2,
+    "Tower Defense":                 -0.9,
+    "Turn-Based RPG":                -0.8,
+    "Turn-Based Strategy":           -0.8,
+    "Visual Novel":                  -0.7,
+    "Other":                         -1.0,
+}
+
+def get_genre_elasticity(genres: list[str]) -> float:
+    """Return the average suggested elasticity for a list of genres."""
+    vals = [GENRE_ELASTICITY_DEFAULTS.get(g, DEFAULT_ELASTICITY) for g in genres]
+    return round(sum(vals) / len(vals), 1) if vals else DEFAULT_ELASTICITY
 
 # ── ASP blending factors ───────────────────────────────────────────────────────
 # Year-1 blended ASP as a fraction of launch MSRP.

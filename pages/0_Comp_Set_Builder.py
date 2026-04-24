@@ -93,14 +93,55 @@ def fetch_comp_data(appid: int) -> dict:
     except Exception as e:
         return {"details": None, "reviews": None, "error": f"Unexpected error: {e}"}
 
+# Year-1 review share by age — what fraction of lifetime reviews fell in year 1?
+# Heuristic: games front-load ~50-60% of lifetime reviews in year 1.
+# Used to back-calculate estimated year-1 reviews for older comps.
+YEAR1_REVIEW_SHARE = {
+    0:  1.00,   # < 12 months: in year 1, use actual count
+    12: 0.55,   # 1-2 years old: ~55% of reviews were in year 1
+    24: 0.48,   # 2-3 years old
+    36: 0.42,   # 3-5 years old
+    60: 0.35,   # 5+ years old
+}
+
+def estimate_year1_reviews(total_reviews: int, age_months: float | None) -> tuple[int, bool]:
+    """
+    Return (estimated_year1_reviews, was_adjusted).
+    If age < 12 months, returns actual count unchanged.
+    For older games, applies a year-1 share factor to back-calculate year-1 reviews.
+    """
+    if age_months is None or age_months < 12:
+        return total_reviews, False
+    for min_age in sorted(YEAR1_REVIEW_SHARE.keys(), reverse=True):
+        if age_months >= min_age:
+            factor = YEAR1_REVIEW_SHARE[min_age]
+            return max(1, int(total_reviews * factor)), True
+    return total_reviews, False
+
+
 def run_estimation(data: dict, user_tier: str, genre: str,
                    is_game_pass: bool, is_early_access: bool, is_short_game: bool):
     if data.get("error") or not data.get("details") or not data.get("reviews"):
         return None
     try:
+        details = data["details"].copy()
+        reviews = data["reviews"].copy()
+        age_months = details.get("age_months")
+
+        # Year-1 adjustment: for older games, estimate year-1 review count
+        total_reviews = reviews.get("total_reviews", 0)
+        yr1_reviews, was_adjusted = estimate_year1_reviews(total_reviews, age_months)
+        if was_adjusted:
+            reviews = reviews.copy()
+            reviews["total_reviews"]  = yr1_reviews
+            reviews["total_positive"] = max(1, int(yr1_reviews * reviews.get("sentiment_ratio", 0.8)))
+            reviews["total_negative"] = yr1_reviews - reviews["total_positive"]
+            reviews["_yr1_adjusted"]  = True
+            reviews["_yr1_factor"]    = yr1_reviews / total_reviews if total_reviews > 0 else 1.0
+
         return Estimator().estimate(
-            parsed_details=data["details"],
-            parsed_reviews=data["reviews"],
+            parsed_details=details,
+            parsed_reviews=reviews,
             genre=genre,
             quality_tier=user_tier,
             is_game_pass=is_game_pass,
@@ -187,6 +228,7 @@ with tab_search:
                         "is_game_pass":   False,
                         "is_early_access": False,
                         "is_short_game":  False,
+                        "weight":         1.0,
                     })
                     st.session_state.csb_results.pop(r["appid"], None)
                     st.rerun()
@@ -212,6 +254,7 @@ with tab_appid:
                 "is_game_pass":   False,
                 "is_early_access": False,
                 "is_short_game":  False,
+                "weight":         1.0,
             })
             st.session_state.csb_results.pop(int(manual_id), None)
             st.rerun()
@@ -244,12 +287,29 @@ for i, comp in enumerate(st.session_state.csb_comps):
             ea  = st.checkbox("Early Access",       value=comp["is_early_access"],key=f"ea_{comp['appid']}")
             sg  = st.checkbox("Short Game (<10h)",  value=comp["is_short_game"],  key=f"sg_{comp['appid']}")
 
+        weight = st.slider(
+            "Similarity Weight",
+            min_value=0.25, max_value=2.0,
+            value=float(comp.get("weight", 1.0)),
+            step=0.25,
+            key=f"wt_{comp['appid']}",
+            help="How closely this comp resembles your game. "
+                 "2x = very similar, pull it toward your benchmark. "
+                 "0.25x = loosely comparable, reduce its influence.",
+            format="%.2fx"
+        )
+        weight_label = "🎯 Very similar" if weight >= 1.75 else (
+                       "✅ Similar" if weight >= 1.0 else
+                       "📉 Loosely comparable" if weight >= 0.5 else "⬇️ Low influence")
+        st.caption(f"Weight: **{weight:.2f}x** — {weight_label}")
+
         # Update comp config
         st.session_state.csb_comps[i]["user_tier"]       = new_tier
         st.session_state.csb_comps[i]["genre"]           = new_genre
         st.session_state.csb_comps[i]["is_game_pass"]    = gp
         st.session_state.csb_comps[i]["is_early_access"] = ea
         st.session_state.csb_comps[i]["is_short_game"]   = sg
+        st.session_state.csb_comps[i]["weight"]          = weight
 
         if st.button("🗑️ Remove", key=f"remove_{comp['appid']}"):
             st.session_state.csb_comps.pop(i)
@@ -301,7 +361,13 @@ if not st.session_state.csb_results:
     st.stop()
 
 st.divider()
-st.subheader("3️⃣ Comp Set Performance")
+st.subheader("3️⃣ Est. Year-1 Performance")
+st.caption(
+    "All estimates are calibrated to **year-1 launch performance** — "
+    "the window that matters for launch strategy. "
+    "For games older than 12 months, reviews are back-calculated to their estimated year-1 count "
+    "(~50% of lifetime reviews occur in year 1). Labeled with 🔄 where adjusted."
+)
 
 # Build results table
 rows = []
@@ -323,10 +389,13 @@ for comp in st.session_state.csb_comps:
     reviews_total  = rev.get("total_reviews", 0)
     sentiment      = rev.get("sentiment_ratio", 0.0)
     release_str    = det.get("release_date_str", "—")
+    age_months     = det.get("age_months")
+    yr1_reviews, was_yr1_adjusted = estimate_year1_reviews(reviews_total, age_months)
     flags = []
     if comp["is_game_pass"]:    flags.append("GP")
     if comp["is_early_access"]: flags.append("EA")
     if comp["is_short_game"]:   flags.append("Short")
+    if was_yr1_adjusted:        flags.append("🔄 Yr1 est.")
 
     if est and est.primary:
         p = est.primary
@@ -343,7 +412,7 @@ for comp in st.session_state.csb_comps:
             "Title":         name,
             "Price":         f"${price:.2f}" if price else "—",
             "Released":      release_str,
-            "Reviews":       f"{reviews_total:,}",
+            "Reviews":       f"{yr1_reviews:,}" + (f" (of {reviews_total:,})" if was_yr1_adjusted else ""),
             "Sentiment":     f"{sentiment_emoji(sentiment)} {sentiment:.0%}",
             "Tier":          TIER_LABELS[comp["user_tier"]],
             "Genre":         comp["genre"],
@@ -421,11 +490,26 @@ if len(valid_p50s) < 2:
 st.divider()
 st.subheader("4️⃣ Where Does Your Game Land?")
 
+# Build weighted p50 list — repeat values proportional to weight for percentile math
+weighted_p50s = []
+for comp in st.session_state.csb_comps:
+    result = st.session_state.csb_results.get(comp["appid"])
+    if not result: continue
+    est = result.get("estimate")
+    if not est or not est.primary: continue
+    weight = comp.get("weight", 1.0)
+    units = int(est.primary.units_mid)
+    # Repeat with weight (round to nearest 0.25 steps = 4 repetitions max)
+    reps = max(1, round(weight * 4))
+    weighted_p50s.extend([units] * reps)
+
+weighted_p50s_sorted = sorted(weighted_p50s)
+n = len(weighted_p50s_sorted)
 valid_p50s_sorted = sorted(valid_p50s)
-n = len(valid_p50s_sorted)
-p25_val = valid_p50s_sorted[max(0, math.ceil(n * 0.25) - 1)]
-p50_val = valid_p50s_sorted[math.ceil(n * 0.50) - 1]
-p75_val = valid_p50s_sorted[min(n - 1, math.ceil(n * 0.75) - 1)]
+nv = len(valid_p50s_sorted)
+p25_val = weighted_p50s_sorted[max(0, math.ceil(n * 0.25) - 1)]
+p50_val = weighted_p50s_sorted[math.ceil(n * 0.50) - 1]
+p75_val = weighted_p50s_sorted[min(n - 1, math.ceil(n * 0.75) - 1)]
 
 bk1, bk2, bk3, bk4 = st.columns(4)
 bk1.metric("Comp Set Min",    fmt_units(min(valid_p50s)))

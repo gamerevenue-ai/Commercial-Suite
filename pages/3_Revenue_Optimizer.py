@@ -14,6 +14,8 @@ from datetime import date, datetime
 from src.revenue_optimizer import (
     STEAM_PRICE_TIERS,
     DEFAULT_ELASTICITY,
+    GENRE_ELASTICITY_DEFAULTS,
+    get_genre_elasticity,
     build_price_curve,
     build_discount_calendar,
     compute_breakeven,
@@ -114,13 +116,21 @@ with st.sidebar:
     )
     base_price = float(base_price_str.replace("$", ""))
 
+    genre_suggested_elasticity = get_genre_elasticity(genres)
     elasticity = st.slider(
         "Price Elasticity",
-        min_value=-1.6, max_value=-0.3, value=DEFAULT_ELASTICITY, step=0.1,
-        help="How sensitive buyers are to price changes. -0.8 = 10% price hike → 8% fewer units. "
-             "More negative = more price-sensitive audience."
+        min_value=-1.6, max_value=-0.3,
+        value=float(st.session_state.get("ro_elasticity", genre_suggested_elasticity)),
+        step=0.1,
+        help="How sensitive buyers are to price changes. -1.0 = 10% price hike → 10% fewer units. "
+             "More negative = more price-sensitive audience (mass-market). "
+             "Less negative = less price-sensitive (niche/enthusiast)."
     )
-    st.caption(f"Current: {elasticity:.1f}  |  Typical range: −0.5 (niche) to −1.5 (mass market)")
+    st.session_state["ro_elasticity"] = elasticity
+    elasticity_label = "⚠️ Low sensitivity — may overstate revenue at higher prices" if elasticity > -0.7 else (
+                       "✅ Typical competitive genre sensitivity" if elasticity <= -1.1 else
+                       "📊 Moderate sensitivity — typical for indie/AA")
+    st.caption(f"Genre suggested: **{genre_suggested_elasticity:.1f}** · Current: {elasticity:.1f} · {elasticity_label}")
 
     st.divider()
     st.header("💰 Breakeven (optional)")
