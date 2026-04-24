@@ -52,6 +52,22 @@ SENTIMENT_LABELS = {
 
 CALENDAR = load_steam_calendar()
 
+# ── Comp-anchored pricing bands ────────────────────────────────────────────────
+# Price recommendation = comp-set median × band, snapped to nearest Steam tier.
+# Sentiment adjusts where in the band you land: better reception → higher fraction.
+# Logic: your comp set's revealed pricing IS the demand curve for your genre/tier.
+# Elasticity is a sensitivity tool; the comp median is the market-validated anchor.
+COMP_PRICE_BAND: dict[str, tuple[float, float]] = {
+    "very_positive":   (1.00, 1.20),   # at or above median — strong reviews justify the premium
+    "mostly_positive": (0.80, 1.00),   # at or slightly below median — solid but not top of market
+    "mixed":           (0.60, 0.80),   # discount needed — mixed reviews require a price concession
+}
+SENTIMENT_PRICE_NOTE: dict[str, str] = {
+    "very_positive":   "Strong reviews justify pricing at or above the comp median. You're competitive with the top titles in this set.",
+    "mostly_positive": "Good reception supports the comp median, with room to undercut by ~20% if you want to build playerbase faster.",
+    "mixed":           "Mixed reviews require a price discount vs. better-reviewed comps. Buyers need a reason to take a chance on you.",
+}
+
 # ── Helper formatters ──────────────────────────────────────────────────────────
 def fmt_units(n: int) -> str:
     if n >= 1_000_000:
@@ -110,11 +126,28 @@ with st.sidebar:
     st.header("⚙️ Assumptions")
 
     base_price_str = st.select_slider(
-        "Base Launch Price (USD)",
+        "Your Target Launch Price (USD)",
         options=[f"${p:.2f}" for p in STEAM_PRICE_TIERS],
         value=f"${st.session_state.get('ro_base_price', 19.99):.2f}"
     )
     base_price = float(base_price_str.replace("$", ""))
+
+    comp_median_raw = st.number_input(
+        "Comp Set Median Price (USD)",
+        min_value=0.99, max_value=79.99,
+        value=float(st.session_state.get("ro_comp_median_price", base_price)),
+        step=1.0, format="%.2f",
+        help=(
+            "The median MSRP of your competitive set. "
+            "Auto-populated from Comp Set Builder, or enter manually. "
+            "This anchors the pricing recommendation to market reality — "
+            "your comp set's revealed pricing IS the demand curve for your genre."
+        ),
+    )
+    # Snap comp median to nearest Steam tier for comparisons
+    comp_median = min(STEAM_PRICE_TIERS, key=lambda p: abs(p - comp_median_raw))
+    st.session_state["ro_comp_median_price"] = comp_median_raw
+    st.caption(f"Snaps to nearest Steam tier: **${comp_median:.2f}**")
 
     genre_suggested_elasticity = get_genre_elasticity(genres)
     elasticity = st.slider(
@@ -144,11 +177,12 @@ with st.sidebar:
                                        min_value=date(2026, 1, 1), max_value=date(2027, 12, 31))
 
     # Persist to session state
-    st.session_state["ro_game_name"]  = game_name
-    st.session_state["ro_genres"]     = genres
-    st.session_state["ro_tier"]       = tier
-    st.session_state["ro_units_p50"]  = units_p50
-    st.session_state["ro_base_price"] = base_price
+    st.session_state["ro_game_name"]        = game_name
+    st.session_state["ro_genres"]           = genres
+    st.session_state["ro_tier"]             = tier
+    st.session_state["ro_units_p50"]        = units_p50
+    st.session_state["ro_base_price"]       = base_price
+    st.session_state["ro_comp_median_price"] = comp_median_raw
 
 # ── Main panel ─────────────────────────────────────────────────────────────────
 st.title("📈 Revenue Optimizer")
@@ -161,12 +195,135 @@ if units_p50 < 100:
     st.warning("Enter your unit estimates in the sidebar to begin.")
     st.stop()
 
-# ── Section 1: Price Tier Revenue Curve ───────────────────────────────────────
-st.subheader("💵 Revenue at Price Tiers")
+# Pre-compute curve here so both sections below can reference it
+curve = build_price_curve(
+    base_units_p10=float(units_p10),
+    base_units_p50=float(units_p50),
+    base_units_p90=float(units_p90),
+    base_price=base_price,
+    quality_tier=tier,
+    sentiment=sentiment,
+    elasticity=elasticity,
+)
+best_tier_r = next((r for r in curve if r.revenue_maximizing), curve[0])
+base_tier_r = next((r for r in curve if r.is_base_price), curve[0])
+
+# ── Section 0: Comp-Anchored Price Recommendation ─────────────────────────────
+st.subheader("🎯 Comp-Anchored Price Recommendation")
 st.caption(
-    f"Units adjusted per price tier using elasticity = {elasticity:.1f}. "
-    f"ASP = {get_asp_factor(tier, sentiment):.0%} of MSRP (blended year-1, post-discount). "
-    f"Net = gross × {STEAM_SHARE:.0%} Steam share × {VAT_FACTOR:.0%} VAT factor."
+    "Primary recommendation based on your competitive set's **revealed market pricing**, "
+    "adjusted for your expected sentiment positioning within that set. "
+    "Use the elasticity curve below as a sensitivity check — not as the anchor."
+)
+
+lo_f, hi_f = COMP_PRICE_BAND[sentiment]
+rec_lo_raw   = comp_median * lo_f
+rec_hi_raw   = comp_median * hi_f
+rec_lo_tier  = min(STEAM_PRICE_TIERS, key=lambda p: abs(p - rec_lo_raw))
+rec_hi_tier  = min(STEAM_PRICE_TIERS, key=lambda p: abs(p - rec_hi_raw))
+if rec_hi_tier < rec_lo_tier:
+    rec_hi_tier = rec_lo_tier
+
+ra1, ra2, ra3, ra4 = st.columns(4)
+
+ra1.metric(
+    "Comp Set Median",
+    f"${comp_median:.2f}",
+    help="Market-revealed price tolerance for your genre/tier. Set in sidebar.",
+)
+
+if rec_lo_tier == rec_hi_tier:
+    ra2.metric(
+        "Recommended Price",
+        f"${rec_lo_tier:.2f}",
+        help=f"{sentiment.replace('_',' ').title()} band: {lo_f:.0%}–{hi_f:.0%} of comp median",
+    )
+else:
+    ra2.metric(
+        "Recommended Range",
+        f"${rec_lo_tier:.2f} – ${rec_hi_tier:.2f}",
+        help=f"{sentiment.replace('_',' ').title()} band: {lo_f:.0%}–{hi_f:.0%} of comp median",
+    )
+
+# Your base vs the range
+in_range = rec_lo_tier - 0.01 <= base_price <= rec_hi_tier + 0.01
+above    = base_price > rec_hi_tier + 0.01
+ra3.metric(
+    "Your Base Price",
+    f"${base_price:.2f}",
+    delta="✅ in range" if in_range else (
+        f"⬆ ${base_price - rec_hi_tier:.2f} above range" if above
+        else f"⬇ ${rec_lo_tier - base_price:.2f} below range"
+    ),
+    delta_color="off" if in_range else "inverse",
+)
+
+# Elasticity optimum as secondary reference
+elast_delta_pct = ((best_tier_r.net_p50 / base_tier_r.net_p50) - 1) * 100 if base_tier_r.net_p50 else 0
+ra4.metric(
+    "Elasticity Model Optimum",
+    f"${best_tier_r.price:.2f}",
+    delta=f"{elast_delta_pct:+.1f}% vs base (sensitivity only)",
+    delta_color="off",
+    help=(
+        "The price that maximizes modeled revenue given your elasticity setting. "
+        "At elasticity ≤ -1.0, this mechanically points to the lowest tier. "
+        "Use as a sensitivity signal, not a market recommendation."
+    ),
+)
+
+# Narrative
+note = SENTIMENT_PRICE_NOTE[sentiment]
+if in_range:
+    st.success(
+        f"✅ **{note}** "
+        f"Your base price **${base_price:.2f}** is within the comp-anchored range **${rec_lo_tier:.2f}–${rec_hi_tier:.2f}**."
+    )
+elif above:
+    st.warning(
+        f"⚠️ **Your base price (${base_price:.2f}) is above the recommended range (${rec_lo_tier:.2f}–${rec_hi_tier:.2f}).** "
+        f"To justify pricing above the comp median, you need to outperform the set on reviews and sentiment. "
+        f"{note}"
+    )
+else:
+    st.warning(
+        f"⚠️ **Your base price (${base_price:.2f}) is below the recommended range (${rec_lo_tier:.2f}–${rec_hi_tier:.2f}).** "
+        f"In this comp set, pricing at ${base_price:.2f} signals a budget or high-quality game. "
+        f"Games below ${rec_lo_tier:.2f} in this genre typically have >90% positive reviews to justify it. "
+        f"{note}"
+    )
+
+with st.expander("📐 How is this recommendation calculated?"):
+    st.markdown(f"""
+**Framework: Comp-Anchored Pricing with Sentiment Adjustment**
+
+| | Band (% of comp median) | At comp median ${comp_median:.2f} | Steam tier |
+|---|---|---|---|
+| Very Positive (85%+) | {COMP_PRICE_BAND['very_positive'][0]:.0%} – {COMP_PRICE_BAND['very_positive'][1]:.0%} | ${comp_median * COMP_PRICE_BAND['very_positive'][0]:.2f} – ${comp_median * COMP_PRICE_BAND['very_positive'][1]:.2f} | index to or above median |
+| Mostly Positive (70–84%) | {COMP_PRICE_BAND['mostly_positive'][0]:.0%} – {COMP_PRICE_BAND['mostly_positive'][1]:.0%} | ${comp_median * COMP_PRICE_BAND['mostly_positive'][0]:.2f} – ${comp_median * COMP_PRICE_BAND['mostly_positive'][1]:.2f} | at or slightly below median |
+| Mixed (40–69%) | {COMP_PRICE_BAND['mixed'][0]:.0%} – {COMP_PRICE_BAND['mixed'][1]:.0%} | ${comp_median * COMP_PRICE_BAND['mixed'][0]:.2f} – ${comp_median * COMP_PRICE_BAND['mixed'][1]:.2f} | significant discount to comp set |
+
+**Why comp-anchored, not elasticity-driven?**
+
+The comp set's revealed pricing IS the demand curve for your genre and tier.
+Buyers comparison-shop — if your game sits at ${base_price:.2f} alongside titles priced at ${comp_median:.2f},
+they'll make a quality judgment. Games that price significantly below the comp set median
+signal budget quality OR have exceptional reviews (>90%) to justify the accessibility price.
+
+At elasticity **{elasticity:.1f}**, the mathematical optimum is **${best_tier_r.price:.2f}** — {elast_delta_pct:+.1f}% more modeled revenue.
+This is a sensitivity metric, not a market recommendation. The elasticity model doesn't capture
+price signaling, buyer psychology, or the premium/discount signal your price sends vs. comps.
+    """)
+
+st.divider()
+
+# ── Section 1: Price Tier Revenue Curve ───────────────────────────────────────
+st.subheader("💵 Price Sensitivity Curve")
+st.caption(
+    f"Shows modeled revenue if you priced at each tier, holding your P50 unit estimate constant at the base price "
+    f"and adjusting for elasticity ({elasticity:.1f}). Use this as a **sensitivity analysis** — "
+    f"how much revenue changes if you price ±$5–10 from your comp-anchored recommendation. "
+    f"Net = units × ASP ({get_asp_factor(tier, sentiment):.0%}) × {STEAM_SHARE:.0%} Steam share × {VAT_FACTOR:.0%} VAT."
 )
 with st.expander("ℹ️ How are the ASP factor and elasticity calculated?"):
     st.markdown(f"""
@@ -197,27 +354,37 @@ This is a model assumption — your game's actual elasticity depends on genre, c
     """)
 
 
-curve = build_price_curve(
-    base_units_p10=float(units_p10),
-    base_units_p50=float(units_p50),
-    base_units_p90=float(units_p90),
-    base_price=base_price,
-    quality_tier=tier,
-    sentiment=sentiment,
-    elasticity=elasticity,
-)
-
-best_tier = next((r for r in curve if r.revenue_maximizing), curve[0])
-base_tier = next((r for r in curve if r.is_base_price), curve[0])
+# Use curve / best_tier_r / base_tier_r computed above in Section 0
+best_tier = best_tier_r
+base_tier = base_tier_r
 
 # ── KPI strip ──────────────────────────────────────────────────────────────────
+# Primary: comp-anchored recommendation. Secondary: elasticity model sensitivity.
 k1, k2, k3, k4 = st.columns(4)
-k1.metric("Revenue-Maximizing Price", f"${best_tier.price:.2f}",
-          delta=f"{(best_tier.price - base_price):+.2f} vs base" if best_tier.price != base_price else "= your base price")
-k2.metric("P50 Net Revenue at Best Price", fmt_usd(best_tier.net_p50))
-k3.metric("P50 Net Revenue at Base Price", fmt_usd(base_tier.net_p50))
-k4.metric("Revenue Uplift (base → best)",
-          f"{((best_tier.net_p50 / base_tier.net_p50) - 1)*100:+.1f}%" if base_tier.net_p50 > 0 else "—")
+k1.metric(
+    "Comp-Anchored Recommendation",
+    f"${rec_lo_tier:.2f}" + (f" – ${rec_hi_tier:.2f}" if rec_hi_tier != rec_lo_tier else ""),
+    delta=f"your base ${base_price:.2f} is {'✅ in range' if in_range else ('⬆ above' if above else '⬇ below')}",
+    delta_color="off",
+    help="Primary signal. Based on comp set median × sentiment band.",
+)
+k2.metric(
+    "P50 Net Revenue at Your Base",
+    fmt_usd(base_tier.net_p50),
+    help=f"At your base price ${base_price:.2f}",
+)
+k3.metric(
+    "Elasticity Model Optimum",
+    f"${best_tier.price:.2f}",
+    delta=f"{((best_tier.net_p50 / base_tier.net_p50) - 1)*100:+.1f}% vs base" if base_tier.net_p50 > 0 else "—",
+    delta_color="off",
+    help="Sensitivity signal only — mechanically pulls to lowest tier at elasticity ≤ -1.0.",
+)
+k4.metric(
+    "P50 Net at Elasticity Optimum",
+    fmt_usd(best_tier.net_p50),
+    help=f"What the model projects at ${best_tier.price:.2f}",
+)
 
 st.divider()
 
@@ -318,41 +485,45 @@ chart = (bar_p50 + error + best_marker).properties(height=380).configure_axis(
 st.altair_chart(chart, use_container_width=True)
 st.caption("Bars = P50. Error bars = P10 (pessimistic) to P90 (optimistic). ▲ = revenue-maximizing tier.")
 
-# ── Positioning insight ────────────────────────────────────────────────────────
+# ── Elasticity sensitivity note ────────────────────────────────────────────────
 revenue_delta_pct = ((best_tier.net_p50 / base_tier.net_p50) - 1) * 100 if base_tier.net_p50 > 0 else 0
 
-if best_tier.price > base_price:
+if best_tier.price == base_price:
+    st.success(
+        f"✅ **Your base price ${base_price:.2f} is the elasticity model optimum** — "
+        f"consistent with both the sensitivity curve and your comp-anchored recommendation."
+    )
+elif abs(revenue_delta_pct) < 10:
+    # Difference is small — not worth deviating from comp anchor
+    st.info(
+        f"📊 **Flat sensitivity curve** — the elasticity model optimum is **${best_tier.price:.2f}** "
+        f"but the revenue difference vs. your base is only **{revenue_delta_pct:+.1f}%** "
+        f"(${abs(best_tier.net_p50 - base_tier.net_p50)/1000:.0f}K). "
+        f"Within this margin, your comp-anchored price **${rec_lo_tier:.2f}–${rec_hi_tier:.2f}** is the stronger signal."
+    )
+elif best_tier.price > base_price:
     diff_pct = (best_tier.price / base_price - 1) * 100
     st.info(
-        f"📊 **Pricing opportunity detected:** The revenue-maximizing price is **${best_tier.price:.2f}** — "
-        f"{diff_pct:.0f}% above your base price. At elasticity {elasticity:.1f}, the extra margin "
-        f"outweighs the unit loss. Consider whether your comp set supports this premium."
+        f"📊 **Sensitivity curve favors higher price** — elasticity model optimum **${best_tier.price:.2f}** "
+        f"({diff_pct:.0f}% above base, {revenue_delta_pct:+.1f}% more revenue at P50). "
+        f"This is consistent with your comp-anchored recommendation if **${best_tier.price:.2f}** is in the range "
+        f"**${rec_lo_tier:.2f}–${rec_hi_tier:.2f}**."
     )
-elif best_tier.price < base_price:
-    diff_pct  = (1 - best_tier.price / base_price) * 100
-    price_gap = base_price - best_tier.price
-
-    if diff_pct > 40 and abs(revenue_delta_pct) < 20:
-        # Model is pulling hard toward low price but the gain is marginal — warn
-        st.warning(
-            f"⚠️ **Comp-set anchor conflict.** The model recommends **${best_tier.price:.2f}** — "
-            f"{diff_pct:.0f}% below your base — but the revenue difference is only "
-            f"**{revenue_delta_pct:+.1f}%** (${best_tier.net_p50/1000:.0f}K vs ${base_tier.net_p50/1000:.0f}K). "
-            f"\n\nAt elasticity **{elasticity:.1f}**, the demand model predicts volume gains outpace margin loss at lower prices. "
-            f"But your comp set pricing at **${base_price:.2f}** reflects revealed market preference — "
-            f"if competing titles are successfully selling at that price, buyers will pay it. "
-            f"\n\n**What to check:** If your comps cluster around ${base_price:.2f}, "
-            f"try adjusting elasticity toward **-0.8 to -0.9** (less price-sensitive). "
-            f"Use the slider above. At -0.9, your base price is likely revenue-maximizing."
+else:
+    diff_pct = (1 - best_tier.price / base_price) * 100
+    if diff_pct > 30:
+        st.caption(
+            f"📊 **Sensitivity signal (low confidence):** Elasticity model pulls to **${best_tier.price:.2f}** "
+            f"({diff_pct:.0f}% below base, {revenue_delta_pct:+.1f}%). "
+            f"At elasticity {elasticity:.1f}, the model mechanically favors lower prices — "
+            f"but your comp-anchored recommendation **${rec_lo_tier:.2f}–${rec_hi_tier:.2f}** is the primary signal."
         )
     else:
         st.info(
-            f"📊 **Price sensitivity signal:** The revenue-maximizing price is **${best_tier.price:.2f}** — "
-            f"{diff_pct:.0f}% below your base. At elasticity {elasticity:.1f}, the volume gained from "
-            f"a lower price outweighs the per-unit margin loss ({revenue_delta_pct:+.1f}% more revenue)."
+            f"📊 **Sensitivity curve favors lower price** — elasticity model optimum **${best_tier.price:.2f}** "
+            f"({diff_pct:.0f}% below base, {revenue_delta_pct:+.1f}% more revenue at P50). "
+            f"If this is within your comp-anchored range, it's worth considering."
         )
-else:
-    st.success(f"✅ Your base price **${base_price:.2f}** is already the revenue-maximizing tier.")
 
 st.divider()
 
