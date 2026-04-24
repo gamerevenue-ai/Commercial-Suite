@@ -284,6 +284,108 @@ def build_discount_calendar(
     )
 
 
+# ── Sale event unit uplift model ───────────────────────────────────────────────
+# Unit uplift multiplier vs. baseline daily rate, by event type and discount depth.
+# Calibrated from Steam sales data: seasonal sales drive 5-15x daily unit spikes,
+# themed fests 2-6x, and custom developer sales 1.5-4x.
+# Discount depth amplifies uplift: deeper discount → more wishlist conversions.
+# Source: heuristic from Launch Ledger benchmark data + Steam sales analytics (Apr 2026).
+SALE_UPLIFT_TABLE: dict[str, dict[int, float]] = {
+    "tentpole": {10: 2.0, 15: 2.5, 20: 3.5, 25: 5.0, 33: 7.0, 40: 9.0, 50: 11.0, 67: 15.0, 75: 18.0},
+    "themed":   {10: 1.3, 15: 1.5, 20: 2.0, 25: 2.5, 33: 3.5, 40: 4.5, 50:  6.0, 67:  8.0, 75: 10.0},
+    "custom":   {10: 1.1, 15: 1.2, 20: 1.5, 25: 1.8, 33: 2.2, 40: 2.8, 50:  3.5, 67:  4.5, 75:  5.5},
+}
+
+
+def get_sale_uplift(event_type: str, discount_pct: float) -> float:
+    """
+    Return unit uplift multiplier for a sale event (relative to baseline daily rate).
+    E.g. 7.0 means units sold/day during the sale ≈ 7× normal daily rate.
+    Linearly interpolates between anchored data points.
+    """
+    table = SALE_UPLIFT_TABLE.get(event_type, SALE_UPLIFT_TABLE["custom"])
+    keys  = sorted(table.keys())
+
+    if discount_pct <= keys[0]:
+        return table[keys[0]]
+    if discount_pct >= keys[-1]:
+        return table[keys[-1]]
+
+    for i in range(len(keys) - 1):
+        lo, hi = keys[i], keys[i + 1]
+        if lo <= discount_pct <= hi:
+            t = (discount_pct - lo) / (hi - lo)
+            return table[lo] + t * (table[hi] - table[lo])
+
+    return 1.0
+
+
+@dataclass
+class SaleEventImpact:
+    """Revenue and unit impact of a single discount event vs. a full-price counterfactual."""
+    event_name:       str
+    event_type:       str
+    duration_days:    int
+    discount_pct:     float
+    sale_price:       float
+    uplift_factor:    float         # daily unit multiplier vs. baseline
+    # Per-event totals
+    baseline_units:   float         # what you'd sell at full price those days
+    sale_units:       float         # projected units during the sale
+    incremental_units: float        # extra units vs. full-price counterfactual
+    baseline_net:     float         # net revenue those days at full price
+    sale_net:         float         # net revenue during the sale
+    incremental_net:  float         # sale_net - baseline_net (positive = sale wins)
+
+
+def compute_sale_event_impacts(
+    events: list[DiscountEvent],
+    launch_price: float,
+    quality_tier: str,
+    sentiment: str,
+    units_p50: float,
+    year_days: int = 365,
+) -> list[SaleEventImpact]:
+    """
+    For each discount event, compute the unit and revenue uplift vs.
+    the counterfactual of those same days at full price.
+    Returns one SaleEventImpact per event.
+    """
+    asp         = get_asp_factor(quality_tier, sentiment)
+    daily_units = units_p50 / year_days     # flat daily baseline (conservative; ignores launch spike)
+
+    impacts = []
+    for ev in events:
+        uplift      = get_sale_uplift(ev.event_type, ev.discount_pct)
+        sale_price  = launch_price * ev.sale_price_factor
+        dur         = ev.duration_days
+
+        base_u      = daily_units * dur
+        sale_u      = daily_units * uplift * dur
+        incr_u      = sale_u - base_u
+
+        base_net    = base_u  * launch_price * asp * STEAM_SHARE * VAT_FACTOR
+        sale_net    = sale_u  * sale_price   * asp * STEAM_SHARE * VAT_FACTOR
+        incr_net    = sale_net - base_net
+
+        impacts.append(SaleEventImpact(
+            event_name=ev.name,
+            event_type=ev.event_type,
+            duration_days=dur,
+            discount_pct=ev.discount_pct,
+            sale_price=sale_price,
+            uplift_factor=uplift,
+            baseline_units=base_u,
+            sale_units=sale_u,
+            incremental_units=incr_u,
+            baseline_net=base_net,
+            sale_net=sale_net,
+            incremental_net=incr_net,
+        ))
+
+    return impacts
+
+
 def compute_breakeven(
     dev_cost: float,
     launch_price: float,

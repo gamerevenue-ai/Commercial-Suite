@@ -319,6 +319,8 @@ st.altair_chart(chart, use_container_width=True)
 st.caption("Bars = P50. Error bars = P10 (pessimistic) to P90 (optimistic). ▲ = revenue-maximizing tier.")
 
 # ── Positioning insight ────────────────────────────────────────────────────────
+revenue_delta_pct = ((best_tier.net_p50 / base_tier.net_p50) - 1) * 100 if base_tier.net_p50 > 0 else 0
+
 if best_tier.price > base_price:
     diff_pct = (best_tier.price / base_price - 1) * 100
     st.info(
@@ -327,12 +329,28 @@ if best_tier.price > base_price:
         f"outweighs the unit loss. Consider whether your comp set supports this premium."
     )
 elif best_tier.price < base_price:
-    diff_pct = (1 - best_tier.price / base_price) * 100
-    st.info(
-        f"📊 **Price sensitivity signal:** The revenue-maximizing price is **${best_tier.price:.2f}** — "
-        f"{diff_pct:.0f}% below your base. At elasticity {elasticity:.1f}, the volume gained from "
-        f"a lower price outweighs the per-unit margin loss."
-    )
+    diff_pct  = (1 - best_tier.price / base_price) * 100
+    price_gap = base_price - best_tier.price
+
+    if diff_pct > 40 and abs(revenue_delta_pct) < 20:
+        # Model is pulling hard toward low price but the gain is marginal — warn
+        st.warning(
+            f"⚠️ **Comp-set anchor conflict.** The model recommends **${best_tier.price:.2f}** — "
+            f"{diff_pct:.0f}% below your base — but the revenue difference is only "
+            f"**{revenue_delta_pct:+.1f}%** (${best_tier.net_p50/1000:.0f}K vs ${base_tier.net_p50/1000:.0f}K). "
+            f"\n\nAt elasticity **{elasticity:.1f}**, the demand model predicts volume gains outpace margin loss at lower prices. "
+            f"But your comp set pricing at **${base_price:.2f}** reflects revealed market preference — "
+            f"if competing titles are successfully selling at that price, buyers will pay it. "
+            f"\n\n**What to check:** If your comps cluster around ${base_price:.2f}, "
+            f"try adjusting elasticity toward **-0.8 to -0.9** (less price-sensitive). "
+            f"Use the slider above. At -0.9, your base price is likely revenue-maximizing."
+        )
+    else:
+        st.info(
+            f"📊 **Price sensitivity signal:** The revenue-maximizing price is **${best_tier.price:.2f}** — "
+            f"{diff_pct:.0f}% below your base. At elasticity {elasticity:.1f}, the volume gained from "
+            f"a lower price outweighs the per-unit margin loss ({revenue_delta_pct:+.1f}% more revenue)."
+        )
 else:
     st.success(f"✅ Your base price **${base_price:.2f}** is already the revenue-maximizing tier.")
 
@@ -426,10 +444,11 @@ else:
     selected_events = []
 
     for ev in tentpoles:
-        duration = (ev["end_date"] - ev["start_date"]).days
+        duration  = (ev["end_date"] - ev["start_date"]).days
+        ev_key    = f"{ev['name']}_{ev['start_date']}"   # unique across years
         col_check, col_name, col_dates, col_slider = st.columns([0.5, 3, 2, 3])
         with col_check:
-            include = st.checkbox("", key=f"ev_{ev['name']}", value=True, label_visibility="collapsed")
+            include = st.checkbox("", key=f"ev_{ev_key}", value=True, label_visibility="collapsed")
         with col_name:
             st.markdown(f"**{ev['name']}**")
             if ev.get("notes"):
@@ -440,12 +459,12 @@ else:
             if include:
                 depth = st.slider(
                     "Discount", 10, 75, 33, 5,
-                    key=f"depth_{ev['name']}",
+                    key=f"depth_{ev_key}",
                     format="%d%%"
                 )
                 selected_events.append({**ev, "discount_pct": depth})
         if not include:
-            st.session_state.pop(f"depth_{ev['name']}", None)
+            st.session_state.pop(f"depth_{ev_key}", None)
 
     if eligible_themed:
         genre_label = " / ".join(genres)
@@ -453,10 +472,11 @@ else:
         st.caption("Fests where at least one of your genres qualifies. Themed fests can meaningfully boost discovery.")
 
         for ev in eligible_themed:
-            duration = (ev["end_date"] - ev["start_date"]).days
+            duration  = (ev["end_date"] - ev["start_date"]).days
+            ev_key    = f"{ev['name']}_{ev['start_date']}"
             col_check, col_name, col_dates, col_slider = st.columns([0.5, 3, 2, 3])
             with col_check:
-                include = st.checkbox("", key=f"ev_{ev['name']}", value=False, label_visibility="collapsed")
+                include = st.checkbox("", key=f"ev_{ev_key}", value=False, label_visibility="collapsed")
             with col_name:
                 st.markdown(f"**{ev['name']}**")
                 if ev.get("notes"):
@@ -467,7 +487,7 @@ else:
                 if include:
                     depth = st.slider(
                         "Discount", 10, 75, 20, 5,
-                        key=f"depth_{ev['name']}",
+                        key=f"depth_{ev_key}",
                         format="%d%%"
                     )
                     selected_events.append({**ev, "discount_pct": depth})

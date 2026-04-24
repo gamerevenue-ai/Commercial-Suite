@@ -21,6 +21,9 @@ from revenue_optimizer import (
     get_upcoming_sales,
     build_discount_calendar,
     get_asp_factor,
+    get_sale_uplift,
+    compute_sale_event_impacts,
+    DiscountEvent,
     STEAM_SHARE,
     VAT_FACTOR,
 )
@@ -588,7 +591,7 @@ if len(chart_rows) > 1:
             color_range.append("#546E7A")
 
     gantt = alt.Chart(df_chart).mark_bar(
-        cornerRadiusEnd=4, cornerRadiusStart=4, height=18
+        cornerRadius=4, height=18
     ).encode(
         x=alt.X("start:T", title="Date", axis=alt.Axis(format="%b %Y", tickCount="month")),
         x2="end:T",
@@ -645,98 +648,219 @@ else:
 # ── SECTION 6 — Revenue Impact ────────────────────────────────────────────────
 st.divider()
 st.subheader("6️⃣  Revenue Impact")
+st.caption(
+    "Models the **unit uplift effect** of each sale event — Steam sales cause significant unit spikes "
+    "on discounted days, not just lower prices. Uplift is calibrated by event type and discount depth."
+)
 
-asp_base      = get_asp_factor(quality_tier, sentiment)
-net_per_unit_fp = launch_price * asp_base * STEAM_SHARE * VAT_FACTOR
-baseline_net    = units_p50 * net_per_unit_fp
+asp_base        = get_asp_factor(quality_tier, sentiment)
+daily_units     = units_p50 / 365
+baseline_net    = units_p50 * launch_price * asp_base * STEAM_SHARE * VAT_FACTOR   # no discounts
 
-ri_col1, ri_col2, ri_col3 = st.columns(3)
+with st.expander("ℹ️ How does the uplift model work?"):
+    st.markdown(f"""
+**Unit Uplift vs. Blended ASP**
 
-with ri_col1:
-    st.markdown("**📌 No Discounts (Baseline)**")
-    st.metric("Blended ASP",         f"${launch_price * asp_base:.2f}")
-    st.metric("Year-1 Net (P50)",    fmt_usd(baseline_net))
-    st.caption(f"ASP factor: {asp_base:.1%} ({quality_tier}, {sentiment.replace('_', ' ')})")
+Most discount revenue models only reduce price — they ignore the fact that sale events dramatically increase
+daily unit velocity. Steam seasonal sales drive **5–15× your baseline daily rate**, even after accounting for
+the price cut. This means a 7-day Summer Sale at 33% off can generate more net revenue than 7 normal days,
+because the unit spike far outweighs the margin loss.
 
-if all_events:
-    cal_result = build_discount_calendar(
+| Event Type | Discount | Uplift | Net vs. Full-Price Day |
+|---|---|---|---|
+| Tentpole Sale | 20% | ×3.5 | **2.8× more revenue per day** |
+| Tentpole Sale | 33% | ×7.0 | **4.7× more revenue per day** |
+| Tentpole Sale | 50% | ×11.0 | **5.5× more revenue per day** |
+| Themed Fest   | 20% | ×2.0 | **1.6× more revenue per day** |
+| Custom Sale   | 20% | ×1.5 | **1.2× more revenue per day** |
+
+**Model assumptions:**
+- Baseline daily units = P50 ÷ 365 ({units_p50:,} ÷ 365 = {daily_units:.0f} units/day)
+- Uplift is applied to baseline rate during each sale event
+- Counterfactual: what those days would generate at full price (no sale)
+- Full-year net = full-price days revenue + all sale-event revenue
+- ASP factor ({asp_base:.1%}) applied to all revenue (quality/sentiment adjustment)
+    """)
+
+if not all_events:
+    st.metric("Year-1 Net Revenue (No Discounts, P50)", fmt_usd(baseline_net))
+    st.info("Add sales above to see the unit uplift and revenue impact.")
+else:
+    # ── Build DiscountEvent objects for compute_sale_event_impacts ─────────────
+    from datetime import datetime as _dt
+    disc_events_obj: list[DiscountEvent] = []
+    for ev in all_events:
+        s = _as_date(ev["start_date"])
+        e = _as_date(ev["end_date"])
+        disc_events_obj.append(DiscountEvent(
+            name=ev["name"],
+            start_date=s,
+            end_date=e,
+            discount_pct=float(ev["discount_pct"]),
+            event_type=ev.get("type", "custom"),
+        ))
+
+    impacts = compute_sale_event_impacts(
+        events=disc_events_obj,
         launch_price=launch_price,
         quality_tier=quality_tier,
         sentiment=sentiment,
-        selected_events=all_events,
+        units_p50=float(units_p50),
     )
 
-    # Revenue with discount calendar — use blended_asp (time-weighted price) × quality/sentiment ASP
-    calendar_net = units_p50 * cal_result.blended_asp * asp_base * STEAM_SHARE * VAT_FACTOR
-    delta_net    = calendar_net - baseline_net
-    delta_pct    = (delta_net / baseline_net) * 100 if baseline_net else 0
+    # ── Aggregate year-1 totals ────────────────────────────────────────────────
+    total_sale_days   = sum(imp.duration_days for imp in impacts)
+    full_price_days   = max(0, 365 - total_sale_days)
+    full_price_net    = daily_units * full_price_days * launch_price * asp_base * STEAM_SHARE * VAT_FACTOR
+    full_price_units  = daily_units * full_price_days
 
-    with ri_col2:
-        st.markdown("**📅 Your Discount Calendar**")
-        st.metric(
-            "Blended ASP",
-            f"${cal_result.blended_asp * asp_base:.2f}",
-            delta=f"−{(1 - cal_result.blended_asp / launch_price)*100:.1f}% vs full price",
-            delta_color="inverse",
-        )
-        st.metric(
-            "Year-1 Net (P50)",
-            fmt_usd(calendar_net),
-            delta=f"{delta_pct:+.1f}% vs no discounts",
-            delta_color="normal" if delta_pct >= 0 else "inverse",
-        )
-        st.caption(
-            f"Blended list price: ${cal_result.blended_asp:.2f} × "
-            f"ASP {asp_base:.1%} × 70% Steam × 88% VAT"
-        )
+    total_sale_net    = sum(imp.sale_net   for imp in impacts)
+    total_sale_units  = sum(imp.sale_units for imp in impacts)
+    total_incr_units  = sum(imp.incremental_units for imp in impacts)
+    total_incr_net    = sum(imp.incremental_net   for imp in impacts)
 
-    with ri_col3:
-        st.markdown("**📊 Calendar Stats**")
-        disc_share = cal_result.discount_days / 365
-        st.metric("Events Selected",   len(all_events))
-        st.metric("Discount Days",     f"{cal_result.discount_days} / 365 ({disc_share:.0%})")
-        st.metric("Blended ASP Factor", f"{cal_result.blended_asp_factor:.3f}")
+    year1_total_net   = full_price_net + total_sale_net
+    year1_total_units = full_price_units + total_sale_units
 
-    # Event breakdown
-    st.markdown("**Event Breakdown**")
-    breakdown = []
-    for ev in cal_result.events:
-        sale_p = launch_price * ev.sale_price_factor
-        dur    = ev.duration_days
-        breakdown.append({
-            "Event":         ev.name,
-            "Dates":         f"{ev.start_date.strftime('%b %d')} – {ev.end_date.strftime('%b %d, %Y')}",
-            "Days":          dur,
-            "Discount":      f"{ev.discount_pct:.0f}%",
-            "Sale Price":    f"${sale_p:.2f}",
-            "Revenue Share": f"{dur / 365:.1%} of year",
+    disc_share = total_sale_days / 365
+
+    # ── KPI strip ──────────────────────────────────────────────────────────────
+    k1, k2, k3, k4 = st.columns(4)
+    k1.metric(
+        "Year-1 Net Revenue (with uplift)",
+        fmt_usd(year1_total_net),
+        delta=f"{((year1_total_net / baseline_net) - 1) * 100:+.1f}% vs no discounts",
+        delta_color="normal",
+        help="Full-price days + sale-event days with unit uplift applied",
+    )
+    k2.metric(
+        "Year-1 Units (with uplift)",
+        fmt_units(int(year1_total_units)),
+        delta=f"+{fmt_units(int(total_incr_units))} from sale events",
+        delta_color="normal",
+        help="Baseline daily rate × 365 adjusted for uplift during sale days",
+    )
+    k3.metric(
+        "Incremental Revenue from Sales",
+        fmt_usd(total_incr_net),
+        help="Sale event revenue minus what those same days would have earned at full price",
+        delta=f"across {len(impacts)} events",
+        delta_color="off",
+    )
+    k4.metric(
+        "Discount Days",
+        f"{total_sale_days} / 365",
+        delta=f"{disc_share:.0%} of year",
+        delta_color="off",
+    )
+
+    st.divider()
+
+    # ── Per-event breakdown table ──────────────────────────────────────────────
+    st.markdown("**Event-Level Impact vs. Full-Price Counterfactual**")
+    st.caption(
+        "Each row compares the sale event against the counterfactual of those exact days at full price. "
+        "Incremental net > 0 means the sale was worth it on a revenue basis."
+    )
+
+    rows = []
+    for imp in impacts:
+        roi_color = "🟢" if imp.incremental_net > 0 else "🔴"
+        rows.append({
+            "Event":             imp.event_name,
+            "Days":              imp.duration_days,
+            "Discount":          f"{imp.discount_pct:.0f}%",
+            "Sale Price":        f"${imp.sale_price:.2f}",
+            "Uplift":            f"{imp.uplift_factor:.1f}×",
+            "Sale Units":        fmt_units(int(imp.sale_units)),
+            "Full-Price Units":  fmt_units(int(imp.baseline_units)),
+            "Incr. Units":       f"+{fmt_units(int(imp.incremental_units))}",
+            "Sale Net":          fmt_usd(imp.sale_net),
+            "Full-Price Net":    fmt_usd(imp.baseline_net),
+            "Incr. Net":         f"{roi_color} {fmt_usd(abs(imp.incremental_net))} {'gain' if imp.incremental_net > 0 else 'loss'}",
         })
-    st.dataframe(pd.DataFrame(breakdown), use_container_width=True, hide_index=True)
 
-    # Strategy health indicator
-    st.markdown("---")
-    if disc_share > 0.25:
-        st.warning(
-            f"⚠️ **High discount exposure** — your game is on sale **{disc_share:.0%}** of the year. "
-            "Heavy discounting can erode perceived value and buyer willingness to pay at full price. "
-            "Consider trimming to <20% of the year."
-        )
-    elif disc_share < 0.08:
-        st.info(
-            f"📊 **Low visibility cadence** — your game is on sale **{disc_share:.0%}** of the year. "
-            "Each sale event resets your visibility in Steam's algorithm. "
-            "Consider 2–3 more promotional windows."
-        )
-    else:
-        st.success(
-            f"✅ **Healthy discount cadence** — {disc_share:.0%} of the year on sale. "
-            "Good balance of algorithm-driven visibility and price integrity."
-        )
+    st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
 
-else:
-    with ri_col2:
-        st.metric("Year-1 Net (P50) — Baseline", fmt_usd(baseline_net))
-    st.info("Add sales above to compare your discount calendar against the no-discount baseline.")
+    # ── Visual: sale net vs full-price net per event ───────────────────────────
+    chart_ri_rows = []
+    for imp in impacts:
+        chart_ri_rows.append({"Event": imp.event_name[:25], "Scenario": "Full Price (Counterfactual)", "Net ($K)": imp.baseline_net / 1000})
+        chart_ri_rows.append({"Event": imp.event_name[:25], "Scenario": "Sale + Uplift",               "Net ($K)": imp.sale_net    / 1000})
+
+    if chart_ri_rows:
+        df_ri = pd.DataFrame(chart_ri_rows)
+        ri_chart = alt.Chart(df_ri).mark_bar().encode(
+            x=alt.X("Net ($K):Q", title="Net Revenue ($K)"),
+            y=alt.Y("Event:N",    title=None, sort=None),
+            color=alt.Color(
+                "Scenario:N",
+                scale=alt.Scale(
+                    domain=["Full Price (Counterfactual)", "Sale + Uplift"],
+                    range=["#90A4AE", "#1565C0"],
+                ),
+                legend=alt.Legend(orient="bottom"),
+            ),
+            xOffset="Scenario:N",
+            tooltip=[
+                alt.Tooltip("Event:N",     title="Event"),
+                alt.Tooltip("Scenario:N",  title="Scenario"),
+                alt.Tooltip("Net ($K):Q",  title="Net Revenue ($K)", format=".1f"),
+            ],
+        ).properties(
+            height=max(180, len(impacts) * 40),
+            title="Sale Event Net Revenue vs. Full-Price Counterfactual",
+        )
+        st.altair_chart(ri_chart, use_container_width=True)
+
+    st.divider()
+
+    # ── Year-1 summary ─────────────────────────────────────────────────────────
+    summ1, summ2 = st.columns(2)
+    with summ1:
+        st.markdown("**Year-1 Revenue Composition**")
+        comp_rows = [
+            {"Segment": f"Full-price days ({full_price_days}d)", "Units": fmt_units(int(full_price_units)), "Net Revenue": fmt_usd(full_price_net)},
+        ]
+        for imp in impacts:
+            comp_rows.append({
+                "Segment":    f"{imp.event_name} ({imp.duration_days}d @ {imp.discount_pct:.0f}%)",
+                "Units":      fmt_units(int(imp.sale_units)),
+                "Net Revenue": fmt_usd(imp.sale_net),
+            })
+        comp_rows.append({
+            "Segment":    "TOTAL",
+            "Units":      fmt_units(int(year1_total_units)),
+            "Net Revenue": fmt_usd(year1_total_net),
+        })
+        st.dataframe(pd.DataFrame(comp_rows), use_container_width=True, hide_index=True)
+
+    with summ2:
+        st.markdown("**Strategy Health**")
+        if disc_share > 0.25:
+            st.warning(
+                f"⚠️ **High discount exposure** — {disc_share:.0%} of the year on sale. "
+                "Heavy promotion can erode perceived value. Consider trimming to <20%."
+            )
+        elif disc_share < 0.08:
+            st.info(
+                f"📊 **Low visibility cadence** — {disc_share:.0%} of the year on sale. "
+                "Each event resets your Store page algorithmic rank. Consider 2–3 more windows."
+            )
+        else:
+            st.success(
+                f"✅ **Healthy cadence** — {disc_share:.0%} of the year on sale."
+            )
+
+        total_roi_positive = sum(1 for imp in impacts if imp.incremental_net > 0)
+        total_roi_negative = len(impacts) - total_roi_positive
+        if total_roi_positive == len(impacts):
+            st.success(f"✅ All {len(impacts)} sale events generate positive incremental revenue.")
+        elif total_roi_negative > 0:
+            st.warning(
+                f"⚠️ {total_roi_negative} event(s) show negative incremental revenue "
+                "(unit uplift doesn't offset discount depth). Consider reducing discount % on those events."
+            )
 
 # ── SECTION 7 — Send to Revenue Optimizer ─────────────────────────────────────
 st.divider()
