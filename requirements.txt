@@ -1,3 +1,5 @@
+# Steam Commercial Suite — Python dependencies
+# Updated: 2026-04-24
 streamlit>=1.32.0
 pandas>=2.0.0
 altair>=5.0.0
